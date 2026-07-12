@@ -339,8 +339,19 @@ class AgentTool:
         return table.get(lang.lower(), "text/plain")
 
     # ── Structured JSON Parsing ────────────────────────────────────────────────
+    # ponytail: build param-key whitelist from the manifest at module load.
+    # Closes the "LLM-invents-path-bypass-_resolve" hole by letting us reject
+    # tool calls whose `params` have fields the manifest doesn't authorize.
+    _ALLOWED_PARAMS = {
+        entry["name"]: set(entry["params"]["properties"].keys())
+        for entry in TOOL_MANIFEST
+    }
+    # Also accept any param for management tools that take no manifest body.
+    _NO_SCHEMA_TOOLS = {"finish", "revise", "retry"}
+
     def _parse_tool_call(self, text: str) -> Optional[ToolCall]:
-        """Parse a strict JSON ToolCall from LLM output."""
+        """Parse a strict JSON ToolCall from LLM output. Params are validated
+        against the manifest; unknown keys cause rejection (returns None)."""
         text = text.strip()
 
         # Try direct JSON parse (fast path)
@@ -348,9 +359,9 @@ class AgentTool:
             obj = json.loads(text)
             if "tool" in obj or "action" in obj:
                 tool = obj.get("tool") or obj.get("action", "")
-                params = obj.get("params") or obj.get("params", {})
+                params = obj.get("params") or {}
                 thought = obj.get("thought", "")
-                if tool:
+                if tool and self._validate_params(tool, params):
                     return ToolCall(tool=tool, params=params, thought=thought)
         except json.JSONDecodeError:
             pass
@@ -370,12 +381,23 @@ class AgentTool:
                         tool = obj.get("tool") or obj.get("action", "")
                         params = obj.get("params") or {}
                         thought = obj.get("thought", "")
-                        if tool:
+                        if tool and self._validate_params(tool, params):
                             return ToolCall(tool=tool, params=params, thought=thought)
                     except json.JSONDecodeError:
                         pass
                     break
         return None
+
+    def _validate_params(self, tool_name: str, params: dict) -> bool:
+        """Reject tool calls with undeclared param keys. Returns True to dispatch."""
+        if tool_name in self._NO_SCHEMA_TOOLS:
+            return True
+        if tool_name not in self._ALLOWED_PARAMS:
+            # Unknown tool → dispatcher will return "[ERROR] Unknown tool". Don't hide it.
+            return True
+        if not isinstance(params, dict):
+            return False
+        return set(params.keys()).issubset(self._ALLOWED_PARAMS[tool_name])
 
     # ── Execute a single tool ─────────────────────────────────────────────────
     def _execute_action(self, tool_name: str, params: dict) -> tuple[str, List[Artifact]]:
@@ -461,7 +483,7 @@ class AgentTool:
 
             # ── finish ──────────────────────────────────────────────────────
             if tool_name == "finish":
-                result_text = params.get("result", params.get("result", "Task complete."))
+                result_text = params.get("result", "Task complete.")
                 steps.append({
                     "step": step_num+1,
                     "tool": "finish",

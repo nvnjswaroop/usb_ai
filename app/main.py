@@ -18,6 +18,7 @@ import asyncio
 import json
 import re
 import secrets
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -139,6 +140,10 @@ PERSONALITIES = {
 
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _sp(sid):   return HISTORY_DIR / f"{sid}.json"
+_SESSION_INDEX = HISTORY_DIR / "_index.json"
+
+def _write_index(items):
+    _SESSION_INDEX.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
 
 def _load(sid):
     p = _sp(sid)
@@ -149,8 +154,26 @@ def _load(sid):
 
 def _save(data):
     data["updated"] = time.time()
-    _sp(data["id"]).write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    p = _sp(data["id"])
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # ponytail: write index eagerly; replaces the per-call glob+json.dumps disk
+    # storm in api_sessions. Cost: one extra write per save, gain: O(1) reads.
+    try:
+        idx = json.loads(_SESSION_INDEX.read_text(encoding="utf-8")) if _SESSION_INDEX.exists() else []
+    except (OSError, ValueError):
+        idx = []
+    rec = next((i for i in idx if i["id"] == data["id"]),
+               {"id": data["id"]})
+    rec.update({"id": data["id"], "title": data.get("title", "Chat"),
+                "updated": data["updated"],
+                "message_count": len(data.get("messages", []))})
+    idx = [i for i in idx if i["id"] != data["id"]]
+    idx.append(rec)
+    idx.sort(key=lambda x: x.get("updated", 0), reverse=True)
+    try:
+        _write_index(idx)
+    except OSError:
+        pass  # ponytail: index is advisory; api_sessions falls back to glob.
 
 def _sys(mode="chat"): return PERSONALITIES.get(mode, PERSONALITIES["chat"])
 
@@ -371,17 +394,26 @@ async def api_new_session():
 
 @app.get("/api/sessions")
 async def api_sessions(limit: int = 100):
+    # ponytail: read the index first (one disk read), fall back to glob on corruption.
+    # Cap at 100 default, avoid O(n) disk reads scaling forever.
     out = []
-    for p in HISTORY_DIR.glob("*.json"):
-        try:
-            d = json.loads(p.read_text(encoding="utf-8"))
-            out.append({"id":d["id"],"title":d.get("title","Chat"),
-                        "updated":d.get("updated",0),
-                        "message_count":len(d.get("messages",[]))})
-        except (OSError, ValueError) as e: print(f"[warn] session load failed {p.name}: {e}", flush=True)
-    out.sort(key=lambda x: x["updated"], reverse=True)
-    # ponytail: cap at 100 default, avoid O(n) disk reads scaling forever
-    return {"sessions":out[:limit]}
+    try:
+        if _SESSION_INDEX.exists():
+            out = json.loads(_SESSION_INDEX.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        out = []
+    if not out:
+        # Fallback: rebuild index from disk (first run / after corruption).
+        for p in HISTORY_DIR.glob("*.json"):
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                out.append({"id": d["id"], "title": d.get("title", "Chat"),
+                            "updated": d.get("updated", 0),
+                            "message_count": len(d.get("messages", []))})
+            except (OSError, ValueError) as e:
+                print(f"[warn] session load failed {p.name}: {e}", flush=True)
+        out.sort(key=lambda x: x.get("updated", 0), reverse=True)
+    return {"sessions": out[:limit]}
 
 @app.get("/api/sessions/{sid}")
 async def api_get_session(sid: str): return _load(sid)
