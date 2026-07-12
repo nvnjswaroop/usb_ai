@@ -31,13 +31,17 @@ def _is_path_allowed(path: Path) -> bool:
         resolved_path = path.resolve()
         # Check if path is within any allowed base directory
         for base_dir in ALLOWED_BASE_DIRS:
-            if base_dir.exists() and str(resolved_path).startswith(str(base_dir.resolve())):
+            if base_dir.exists() and resolved_path.is_relative_to(base_dir.resolve()):
                 return True
-        # Also allow paths relative to current working directory
-        if str(resolved_path).startswith(str(Path.cwd().resolve())):
-            return True
+        # Also allow paths relative to current working directory ONLY if cwd
+        # is itself inside an allowed dir — closes the cwd `..` hole.
+        cwd_resolved = Path.cwd().resolve()
+        for base_dir in ALLOWED_BASE_DIRS:
+            if base_dir.exists() and cwd_resolved.is_relative_to(base_dir.resolve()):
+                if resolved_path.is_relative_to(cwd_resolved):
+                    return True
         return False
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 def _resolve(path: str) -> Path:
@@ -54,12 +58,19 @@ def _resolve(path: str) -> Path:
             raise ValueError(f"Access denied: path outside allowed directories")
         return p
 
-    # For relative paths, try to resolve within allowed directories
-    for base in [Path.cwd(), Path.home(),
-                 Path.home() / "Desktop", Path.home() / "Documents"]:
-        candidate = base / p
-        if candidate.exists() and _is_path_allowed(candidate):
+    # For relative paths, try to resolve within allowed directories.
+    # Write paths may not exist yet — accept any candidate inside an allowed dir.
+    base_parents = [Path(__file__).parent.parent,  # OUTPUT/MODELS/HISTORY/WHISPER parents
+                    Path.home(),
+                    Path.home() / "Desktop", Path.home() / "Documents"]
+    for base in base_parents:
+        candidate = (base / p).resolve()
+        if _is_path_allowed(candidate):
             return candidate
+    # ponytail: cwd-relative read was previously allowed here — closed because
+    # an LLM-supplied ".." path slipped back into cwd and read arbitrary files.
+    # If a user genuinely needs relative-to-launch-dir reads, add launch_dir
+    # to ALLOWED_BASE_DIRS explicitly — don't silently fall back.
 
     # Reject relative paths not found in allowed directories
     raise ValueError(f"Access denied: path not found in allowed directories")
@@ -164,3 +175,30 @@ class FileTool:
                         "extension": "", "size_kb": None, "readable": False,
                     })
         return {"status": "ok", "path": "__drives__", "entries": entries}
+
+    # ponytail: simple recursive scan; upgrade to FTS index if search becomes hot
+    def search_content(self, path: str, query: str) -> dict:
+        p = _resolve(path)
+        if not p.is_dir():
+            return {"status": "error", "message": f"Not a directory: {path}"}
+        if not query:
+            return {"status": "error", "message": "Empty query"}
+        q = query.lower()
+        hits, scanned = [], 0
+        for f in p.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in SAFE_TEXT_EXTENSIONS:
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            scanned += 1
+            for i, line in enumerate(text.splitlines(), 1):
+                if q in line.lower():
+                    hits.append({"file": str(f), "line": i, "text": line.strip()[:200]})
+                    if len(hits) >= 100:
+                        return {"status": "ok", "hits": hits, "scanned": scanned,
+                                "truncated": True}
+        return {"status": "ok", "hits": hits, "scanned": scanned}

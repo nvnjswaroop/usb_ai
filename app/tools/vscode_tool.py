@@ -68,7 +68,14 @@ class VSCodeTool:
         Overwrite an existing file with the fixed version.
         Used when AI debugs / fixes a file the user pointed to.
         """
-        p = Path(file_path).resolve()
+        # ponytail: route through file_tool._resolve — the agent already uses
+        # allowlisted dirs, but this guard makes the convention explicit so a
+        # future caller can't bypass it.
+        try:
+            from tools.file_tool import _resolve
+            p = _resolve(file_path)
+        except (OSError, ValueError) as e:
+            return {"status": "error", "message": f"Path not allowed: {e}"}
         if not p.exists():
             return {"status": "error", "message": f"File not found: {file_path}"}
 

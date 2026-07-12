@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 
 
@@ -11,8 +11,8 @@ class Artifact(BaseModel):
     file_name: Optional[str] = None
     mime_type: str = "text/plain"
     preview: Optional[str] = None
-    metadata: Dict = {}
-    trace: List[Dict] = []
+    metadata: Dict = Field(default_factory=dict)
+    trace: List[Dict] = Field(default_factory=list)
 
 
 class ToolCall(BaseModel):
@@ -28,12 +28,12 @@ class AgentStep(BaseModel):
     thought: str = ""
     observation: str = ""
     success: bool = False
-    artifacts: List[Artifact] = []
+    artifacts: List[Artifact] = Field(default_factory=list)
 
 
 class AgentResult(BaseModel):
     status: str
     result: str
-    artifacts: List[Artifact] = []
-    steps: List[Dict] = []
+    artifacts: List[Artifact] = Field(default_factory=list)
+    steps: List[Dict] = Field(default_factory=list)
     total_steps: int = 0

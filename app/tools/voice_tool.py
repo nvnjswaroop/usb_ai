@@ -394,7 +394,8 @@ class VoiceTool:
                  "-ExecutionPolicy", "Bypass", "-File", tmp.name],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            self._tts_proc.wait(timeout=300)
+            # ponytail: 60s cap — a single utterance should never need 5 min; shorter cap = faster recovery from hung powershell/say/espeak.
+            self._tts_proc.wait(timeout=60)
             return {"status": "ok"}
         except subprocess.TimeoutExpired:
             self.stop()
@@ -404,7 +405,7 @@ class VoiceTool:
         finally:
             try:
                 os.unlink(tmp.name)
-            except Exception:
+            except OSError:
                 pass
 
     def _speak_mac(self, text: str, rate: int, voice_id: str) -> dict:
@@ -414,7 +415,7 @@ class VoiceTool:
             self._tts_proc = subprocess.Popen(
                 ["say", "-r", str(wpm)] + voice_arg + [text[:3000]],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._tts_proc.wait(timeout=300)
+            self._tts_proc.wait(timeout=60)
             return {"status": "ok"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -429,7 +430,7 @@ class VoiceTool:
             self._tts_proc = subprocess.Popen(
                 ["espeak", "-s", str(wpm)] + voice_arg + ["--", text[:3000]],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._tts_proc.wait(timeout=300)
+            self._tts_proc.wait(timeout=60)
             return {"status": "ok"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -471,7 +472,7 @@ class VoiceTool:
                     return {"status": "ok", "voices": voices}
                 finally:
                     try: os.unlink(tmp.name)
-                    except: pass
+                    except OSError: pass
             except Exception as e:
                 return {"status": "error", "message": str(e)}
         elif sys.platform == "darwin":
@@ -508,6 +509,11 @@ class VoiceTool:
         if not p.exists():
             return {"status": "error", "message": f"Audio not found: {audio_path}"}
 
+        # Load whisper model once (cached on first call)
+        if not hasattr(self, '_whisper_model'):
+            self._whisper_model = whisper.load_model(
+                model_size, download_root=whisper_dir or str(Path.home() / "whisper_models"))
+
         work_path = str(p)
         tmp_wav   = None
 
@@ -518,12 +524,7 @@ class VoiceTool:
                 work_path = converted
 
         try:
-            # Handle different Whisper versions - check if fp16 parameter is supported
-            try:
-                result = model.transcribe(work_path, fp16=False)
-            except TypeError:
-                # Older Whisper versions don't support fp16 parameter
-                result = model.transcribe(work_path)
+            result = self._whisper_model.transcribe(work_path, fp16=False)
             text   = result.get("text", "").strip()
             lang   = result.get("language", "unknown")
             print(f"[STT] ({lang}): {text[:80]}", flush=True)
@@ -533,7 +534,7 @@ class VoiceTool:
         finally:
             if tmp_wav:
                 try: os.unlink(tmp_wav)
-                except: pass
+                except OSError: pass
 
     def _to_wav(self, p: Path):
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -554,4 +555,5 @@ class VoiceTool:
                     return tmp_path
             except Exception as e:
                 print(f"[STT] ffmpeg failed: {e}", flush=True)
+        Path(tmp_path).unlink(missing_ok=True)
         return None

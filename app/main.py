@@ -4,10 +4,10 @@ import os
 # Force UTF-8 output - prevents Windows cp1252 crash on any unicode chars
 if hasattr(sys.stdout,"reconfigure"):
     try: sys.stdout.reconfigure(encoding="utf-8")
-    except: pass
+    except (OSError, ValueError): pass
 if hasattr(sys.stderr,"reconfigure"):
     try: sys.stderr.reconfigure(encoding="utf-8")
-    except: pass
+    except (OSError, ValueError): pass
 
 from pathlib import Path as _P
 _APP_DIR = str(_P(__file__).parent)
@@ -17,6 +17,7 @@ if _APP_DIR not in sys.path:
 import asyncio
 import json
 import re
+import secrets
 import time
 import traceback
 from pathlib import Path
@@ -53,9 +54,6 @@ from tools.export_tool  import ExportTool
 from tools.agent_tool   import AgentTool
 from tools.code_tool   import CodeTool
 
-# Integration manager is optional; not included in this build.
-int_manager = None
-
 llm_engine   = LLMEngine(MODELS_DIR, USB_ROOT/"prefeeds")
 agent_tool   = AgentTool(OUTPUT_DIR)
 file_tool    = FileTool()
@@ -78,14 +76,18 @@ app.add_middleware(CORSMiddleware,
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
 # ── Auth middleware ─────────────────────────────────────────────────────────────
-_API_KEY = os.environ.get("USB_API_KEY", "")
+_RAW = os.environ.get("USB_API_KEY", "").strip()
+_API_KEY = _RAW or None
 
 @app.middleware("http")
 async def check_auth(request: Request, call_next):
     if request.url.path.startswith("/api/") and not _API_KEY:
         return await call_next(request)
     if request.url.path.startswith("/api/"):
-        if request.headers.get("Authorization") != f"Bearer {_API_KEY}":
+        # ponytail: constant-time compare defeats timing leaks on localhost; swap for HMAC if shared.
+        provided = request.headers.get("Authorization", "")
+        expected = f"Bearer {_API_KEY}" if _API_KEY else ""
+        if _API_KEY and not secrets.compare_digest(provided, expected):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -155,11 +157,12 @@ def _sys(mode="chat"): return PERSONALITIES.get(mode, PERSONALITIES["chat"])
 # ── Streaming Artifact Extractor ───────────────────────────────────────────────
 # Real-time code block detection — emits artifacts as blocks close, not at end.
 # This is what powers the Claude-style artifact panel in the UI.
+# ponytail: single dict — _CODE_EXT is just .get() on the same map.
 _CODE_LANGS = {
     "python": "py", "py": "py",
     "javascript": "js", "js": "js",
     "typescript": "ts", "ts": "ts", "tsx": "tsx",
-    "html": "html", "css": "css", "scss": "scss", "sass": "sass",
+    "html": "html", "htm": "html", "css": "css", "scss": "scss", "sass": "sass",
     "java": "java",
     "cpp": "cpp", "c": "c", "h": "h", "hpp": "hpp",
     "rust": "rs",
@@ -167,7 +170,7 @@ _CODE_LANGS = {
     "bash": "sh", "sh": "sh", "zsh": "zsh", "shell": "sh",
     "sql": "sql",
     "json": "json", "yaml": "yaml", "yml": "yaml",
-    "xml": "xml", "html": "html",
+    "xml": "xml",
     "ruby": "rb", "rb": "rb",
     "php": "php",
     "swift": "swift",
@@ -177,8 +180,7 @@ _CODE_LANGS = {
     "r": "r",
     "lua": "lua",
     "perl": "pl",
-    "csharp": "cs", "cs": "cs",
-    "c#": "cs",
+    "csharp": "cs", "cs": "cs", "c#": "cs",
     "markdown": "md", "md": "md",
     "dockerfile": "dockerfile",
     "makefile": "makefile", "make": "makefile",
@@ -190,41 +192,7 @@ _CODE_LANGS = {
     "jsx": "jsx", "react": "jsx",
     "txt": "txt",
 }
-
-_CODE_EXT = {
-    "python": "py", "py": "py",
-    "javascript": "js", "js": "js",
-    "typescript": "ts", "tsx": "tsx",
-    "html": "html", "htm": "html",
-    "css": "css", "scss": "scss",
-    "java": "java",
-    "cpp": "cpp", "c": "c",
-    "rust": "rs",
-    "go": "go",
-    "bash": "sh", "sh": "sh",
-    "sql": "sql",
-    "json": "json", "yaml": "yaml", "yml": "yaml",
-    "xml": "xml",
-    "ruby": "rb",
-    "php": "php",
-    "swift": "swift",
-    "kotlin": "kt",
-    "dart": "dart",
-    "scala": "scala",
-    "r": "r",
-    "lua": "lua",
-    "perl": "pl",
-    "csharp": "cs",
-    "markdown": "md",
-    "dockerfile": "dockerfile",
-    "makefile": "makefile",
-    "toml": "toml",
-    "graphql": "graphql",
-    "svelte": "svelte",
-    "vue": "vue",
-    "jsx": "jsx",
-    "txt": "txt",
-}
+# _CODE_EXT removed — was a duplicate of _CODE_LANGS values. callers use _CODE_LANGS.get(lang, "txt") directly.
 
 
 class _StreamingArtifactExtractor:
@@ -247,6 +215,8 @@ class _StreamingArtifactExtractor:
         self._open_lang = None  # language of currently open block
         self._open_start = -1   # position where current block's ``` appears
         self._complete: list[Artifact] = []  # completed artifacts ready to pop
+        # ponytail: cursor to avoid O(n²) re-scans. only search past this point.
+        self._scan_pos = 0
 
     def push(self, chunk: str):
         """Feed a token chunk. May complete a block."""
@@ -273,12 +243,13 @@ class _StreamingArtifactExtractor:
         return out
 
     def _scan(self):
-        """Scan _buf for newly-closed code blocks."""
+        """Scan _buf for newly-closed code blocks. Uses _scan_pos cursor."""
         while True:
             if self._open_lang is None:
-                # Look for opening ```
-                idx = self._buf.find("```")
+                # Look for opening ``` — only from cursor forward
+                idx = self._buf.find("```", self._scan_pos)
                 if idx == -1:
+                    self._scan_pos = len(self._buf)
                     break
                 # Language is everything after ``` on the same line
                 rest = self._buf[idx + 3:]
@@ -288,10 +259,12 @@ class _StreamingArtifactExtractor:
                 self._open_lang = lang_raw if lang_raw else "txt"
                 self._open_start = idx
                 self._buf = rest[eol + 1:] if eol != -1 else ""
+                self._scan_pos = 0  # buffer was sliced, reset cursor
             else:
-                # Look for closing ```
-                close = self._buf.find("```")
+                # Look for closing ``` — only from cursor forward
+                close = self._buf.find("```", self._scan_pos)
                 if close == -1:
+                    self._scan_pos = len(self._buf)
                     # Block still open — leave for next scan
                     break
                 code = self._buf[:close]
@@ -299,6 +272,7 @@ class _StreamingArtifactExtractor:
                 self._buf = self._buf[close + 3:]
                 self._open_lang = None
                 self._open_start = -1
+                self._scan_pos = 0  # buffer was sliced, reset cursor
 
     def _make_artifact(self, lang_raw: str, code: str) -> Artifact:
         code = code.strip()
@@ -313,7 +287,7 @@ class _StreamingArtifactExtractor:
                 break
 
         if not filename:
-            ext = _CODE_EXT.get(lang, "txt")
+            ext = _CODE_LANGS.get(lang, "txt")
             filename = f"code_{int(time.time())}.{ext}"
 
         return Artifact(
@@ -360,7 +334,7 @@ async def api_progress():
                         "model size","KV self","llama_kv"]):
                     prog["log_line"] = line.strip()[:120]
                     break
-    except: pass
+    except (OSError, ValueError): pass
     return prog
 
 @app.get("/api/models")
@@ -369,9 +343,13 @@ async def api_models():
                         "size_mb":round(f.stat().st_size/(1024*1024),1)}
                        for f in sorted(MODELS_DIR.glob("*.gguf"))]}
 
+_load_lock = threading.Lock()
+
 @app.post("/api/models/load")
 async def api_load(req: LoadModelRequest):
-    if llm_engine.is_loading(): raise HTTPException(409,"Already loading.")
+    # ponytail: check-and-set under a lock — kills the two-POST race that double-inits Llama.
+    if not _load_lock.acquire(blocking=False):
+        raise HTTPException(409, "Already loading.")
     llm_engine.set_loading(True)
     try:
         await asyncio.get_event_loop().run_in_executor(
@@ -384,6 +362,7 @@ async def api_load(req: LoadModelRequest):
         raise HTTPException(500, str(e))
     finally:
         llm_engine.set_loading(False)
+        _load_lock.release()
 
 @app.post("/api/sessions/new")
 async def api_new_session():
@@ -391,7 +370,7 @@ async def api_new_session():
     return {"status":"ok"}
 
 @app.get("/api/sessions")
-async def api_sessions():
+async def api_sessions(limit: int = 100):
     out = []
     for p in HISTORY_DIR.glob("*.json"):
         try:
@@ -399,9 +378,10 @@ async def api_sessions():
             out.append({"id":d["id"],"title":d.get("title","Chat"),
                         "updated":d.get("updated",0),
                         "message_count":len(d.get("messages",[]))})
-        except: pass
+        except (OSError, ValueError) as e: print(f"[warn] session load failed {p.name}: {e}", flush=True)
     out.sort(key=lambda x: x["updated"], reverse=True)
-    return {"sessions":out}
+    # ponytail: cap at 100 default, avoid O(n) disk reads scaling forever
+    return {"sessions":out[:limit]}
 
 @app.get("/api/sessions/{sid}")
 async def api_get_session(sid: str): return _load(sid)
@@ -430,7 +410,7 @@ async def api_search_sessions(query: str):
             if matches:
                 results.append({"id":d["id"],"title":d.get("title","Chat"),
                                 "updated":d.get("updated",0),"matches":matches})
-        except: pass
+        except (OSError, ValueError) as e: print(f"[warn] session search failed {p.name}: {e}", flush=True)
     results.sort(key=lambda x: x["updated"], reverse=True)
     return {"query":query,"results":results}
 
@@ -503,7 +483,9 @@ async def api_chat(req: ChatRequest):
             print(f"[STREAM ERROR]\n{traceback.format_exc()}", flush=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            session["messages"].append({"role": "assistant", "content": full})
+            # ponytail: don't persist an empty/failed assistant turn — pollutes history with junk.
+            if full.strip():
+                session["messages"].append({"role": "assistant", "content": full})
             _save(session)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -530,43 +512,17 @@ async def api_export(req: ExportRequest):
 
 # @app.post("/api/youtube")  # YouTube endpoint disabled
 
+from calc import evaluate as _calc_evaluate
+
 @app.post("/api/calc")
 async def api_calc(req: CalcRequest):
-    import ast, math, operator, functools
-    ops = {
-        ast.Add: operator.add, ast.Sub: operator.sub,
-        ast.Mult: operator.mul, ast.Div: operator.truediv,
-        ast.Pow: operator.pow, ast.Mod: operator.mod,
-        ast.USub: operator.neg, ast.UAdd: operator.pos,
-    }
-    def eval_node(node):
-        if isinstance(node, ast.Constant): return node.value
-        if isinstance(node, ast.BinOp): return ops[type(node.op)](eval_node(node.left), eval_node(node.right))
-        if isinstance(node, ast.UnaryOp): return ops[type(node.op)](eval_node(node.operand))
-        if isinstance(node, ast.Call):
-            fn = {"sin": math.sin, "cos": math.cos, "tan": math.tan,
-                  "sqrt": math.sqrt, "log": math.log, "log10": math.log10,
-                  "exp": math.exp, "fabs": math.fabs, "floor": math.floor,
-                  "ceil": math.ceil, "degrees": math.degrees, "radians": math.radians,
-                  "pi": math.pi, "e": math.e, "abs": abs, "round": round,
-                  "min": min, "max": max, "sum": sum, "pow": pow,
-                  "int": int, "float": float}.get(node.func.id)
-            if fn and len(node.args) <= 2 and all(isinstance(a, ast.Constant) or isinstance(a, ast.BinOp) or isinstance(a, ast.UnaryOp) or (isinstance(a, ast.Call) and a.func.id in {"sin","cos","tan","sqrt","log","log10","exp","fabs","floor","ceil","degrees","radians","pi","e","abs","round","min","max","sum","pow","int","float"}) for a in node.args):
-                return fn(*[eval_node(a) for a in node.args])
-            raise ValueError("Unsupported function")
-        if isinstance(node, ast.Name):
-            if node.id in ("pi", "e"): return getattr(math, node.id)
-            raise ValueError("Unsupported name")
-        if isinstance(node, ast.List):
-            return [eval_node(x) for x in node.elts]
-        raise ValueError("Unsupported expression")
     try:
-        tree = ast.parse(req.expression, mode="eval")
-        result = eval_node(tree.body)
-        if isinstance(result, float) and (math.isinf(result) or math.isnan(result)):
-            return {"status": "error", "message": "Result is infinite or NaN"}
+        result, result_str = _calc_evaluate(req.expression)
         return {"status": "ok", "expression": req.expression,
-                "result": result, "result_str": str(result)}
+                "result": result, "result_str": result_str}
+    except ValueError as e:
+        # ponytail: surface math errors (div-by-zero, inf/nan, unsupported op) as 200-error, not 500.
+        return {"status": "error", "message": f"Invalid expression: {e}"}
     except Exception as e:
         return {"status": "error", "message": f"Invalid expression: {e}"}
 
@@ -594,8 +550,18 @@ def _safe_filename(name: str) -> str:
 
 @app.post("/api/files/upload")
 async def api_upload(file: UploadFile=File(...)):
+    upload_max = 10 * 1024 * 1024  # ponytail: 10MB cap, add config when needed
     safe_name = _safe_filename(file.filename)
-    dest=OUTPUT_DIR/safe_name; dest.write_bytes(await file.read())
+    dest = OUTPUT_DIR / safe_name
+    # ponytail: stream to disk, not RAM — avoids OOM on large uploads
+    remaining = upload_max
+    with open(dest, "wb") as f:
+        while chunk := await file.read(64 * 1024):
+            remaining -= len(chunk)
+            if remaining < 0:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, "File too large (10MB max)")
+            f.write(chunk)
     return {"status":"ok","filename":safe_name,"path":str(dest)}
 
 @app.post("/api/files/debug")
@@ -621,17 +587,39 @@ async def api_pdf(req: PDFRequest): return pdf_tool.extract_text(req.path)
 
 @app.post("/api/pdf/upload")
 async def api_pdf_upload(file: UploadFile=File(...)):
+    # ponytail: stream-to-disk with the same 10MB cap as /api/files/upload — kills RAM-OOM on large PDFs.
     safe_name = _safe_filename(file.filename)
-    dest=OUTPUT_DIR/safe_name; dest.write_bytes(await file.read())
-    return pdf_tool.extract_text(str(dest))
+    dest = OUTPUT_DIR / safe_name
+    remaining = 10 * 1024 * 1024
+    with open(dest, "wb") as f:
+        while chunk := await file.read(64 * 1024):
+            remaining -= len(chunk)
+            if remaining < 0:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(413, "File too large (10MB max)")
+            f.write(chunk)
+    try:
+        return pdf_tool.extract_text(str(dest))
+    finally:
+        # ponytail: temp upload, clean up after extraction
+        try: dest.unlink(missing_ok=True)
+        except OSError: pass
 
 @app.post("/api/image/upload")
 async def api_image(file: UploadFile=File(...)):
-    data=await file.read()
-    result=image_tool.save_upload(data,file.filename)
-    if result["status"]=="ok":
-        b64=image_tool.read_for_llm(result["path"])
-        result["base64_url"]=b64.get("base64_url","")
+    # ponytail: 10MB streamed cap — image_tool also enforces post-save, but this kills RAM-OOM at the route.
+    remaining = 10 * 1024 * 1024
+    chunks = []
+    while chunk := await file.read(64 * 1024):
+        remaining -= len(chunk)
+        if remaining < 0:
+            raise HTTPException(413, "Image too large (10MB max)")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    result = image_tool.save_upload(data, file.filename)
+    if result["status"] == "ok":
+        b64 = image_tool.read_for_llm(result["path"])
+        result["base64_url"] = b64.get("base64_url", "")
     return result
 
 @app.post("/api/code/run")
@@ -644,7 +632,7 @@ async def api_save_code(req: SaveCodeRequest):
 
 @app.get("/api/preview/{filename}")
 async def api_preview(filename: str):
-    fp=OUTPUT_DIR/filename
+    fp=OUTPUT_DIR/_safe_filename(filename)
     if not fp.exists(): raise HTTPException(404,"Not found")
     return HTMLResponse(fp.read_text(encoding="utf-8"))
 
@@ -664,7 +652,7 @@ async def api_transcribe(file: UploadFile=File(...)):
     result=await asyncio.get_event_loop().run_in_executor(
         None,voice_tool.transcribe,str(tmp),"base",str(WHISPER_DIR))
     try: tmp.unlink()
-    except: pass
+    except OSError: pass
     return result
 
 # Web search endpoint removed for fully local version
@@ -677,8 +665,13 @@ async def api_ppt(req: PPTRequest):
             +'Return ONLY JSON: {"title":"Title","slides":[{"slide_number":1,'
             +'"title":"T","bullet_points":["A","B","C"],"speaker_notes":"N"}]}\n'
             +f"Exactly {req.num_slides} slides, 3-5 bullets each.")
-    try: slide_data=json.loads(llm_engine.generate_json(prompt))
-    except json.JSONDecodeError as e: raise HTTPException(500,f"Bad JSON: {e}")
+    try:
+        _raw_json = llm_engine.generate_json(prompt)
+        slide_data = json.loads(_raw_json)
+    except json.JSONDecodeError as e:
+        # ponytail: log the raw LLM output so a bad-JSON failure is debuggable, not a silent 500.
+        print(f"[PPT] Bad JSON from LLM ({e}): {_raw_json[:500]!r}", flush=True)
+        raise HTTPException(500, f"Bad JSON: {e}")
     try: filename,_=ppt_tool.create_ppt(slide_data,req.style)
     except Exception as e: raise HTTPException(500,f"PPT failed: {e}")
     if req.session_id:
@@ -687,12 +680,12 @@ async def api_ppt(req: PPTRequest):
             s["messages"].append({"role":"assistant",
                 "content":f"[PPT] {slide_data.get('title','')}","ppt_file":filename})
             _save(s)
-        except: pass
+        except (OSError, ValueError) as e: print(f"[warn] ppt session save failed: {e}", flush=True)
     return {"status":"ok","filename":filename,"title":slide_data.get("title","")}
 
 @app.get("/api/ppt/download/{filename}")
 async def api_ppt_dl(filename: str):
-    fp=OUTPUT_DIR/filename
+    fp=OUTPUT_DIR/_safe_filename(filename)
     if not fp.exists(): raise HTTPException(404,"Not found")
     return FileResponse(str(fp),filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
@@ -706,7 +699,7 @@ async def api_outputs():
 
 @app.get("/api/outputs/download/{filename}")
 async def api_dl(filename: str):
-    fp=OUTPUT_DIR/filename
+    fp=OUTPUT_DIR/_safe_filename(filename)
     if not fp.exists(): raise HTTPException(404,"Not found")
     return FileResponse(str(fp),filename=filename)
 
@@ -726,4 +719,11 @@ async def api_agent_execute(req: AgentRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app",host="0.0.0.0",port=8080,reload=False)
+    # ponytail: localhost bind by default; USB_AI_HOST=0.0.0.0 opts into LAN exposure.
+    _host = os.environ.get("USB_AI_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if _API_KEY:
+        import hashlib
+        print(f"[AUTH] API key set (sha256: {hashlib.sha256(_API_KEY.encode()).hexdigest()[:8]})")
+    else:
+        print(f"[AUTH] No USB_API_KEY set — endpoints are open (bound to {_host})")
+    uvicorn.run("main:app", host=_host, port=8080, reload=False)
