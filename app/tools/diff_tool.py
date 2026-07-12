@@ -3,6 +3,7 @@ Diff Tool - show changes between two texts or files
 """
 import difflib
 from pathlib import Path
+from tools.file_tool import _resolve
 
 
 class DiffTool:
@@ -29,8 +30,8 @@ class DiffTool:
         if not pb.exists():
             return {"status": "error", "message": f"File not found: {path_b}"}
         try:
-            text_a = pa.read_text(encoding="utf-8", errors="replace")
-            text_b = pb.read_text(encoding="utf-8", errors="replace")
-            return self.diff_texts(text_a, text_b, pa.name, pb.name)
+                    text_a = _resolve(path_a).read_text(encoding="utf-8", errors="replace")
+                    text_b = _resolve(path_b).read_text(encoding="utf-8", errors="replace")
+                    return self.diff_texts(text_a, text_b, pa.name, pb.name)
         except Exception as e:
             return {"status": "error", "message": str(e)}

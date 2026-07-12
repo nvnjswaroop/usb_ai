@@ -28,6 +28,45 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 
 ---
 
+## Requirements
+
+**Operating system:**
+- Windows 10 (1809+) or Windows 11 — setup runs `setup.bat`
+- macOS 11+ or any modern Linux — setup runs `setup.sh`
+
+**CPU:**
+- 64-bit x86 (Intel/AMD)
+- **AVX2 instruction set required.** Most CPUs since 2013 have it:
+  - Intel Haswell (4th gen, 2013) or newer — covers Core i3/i5/i7/i9 from 2013 onwards
+  - AMD Carrizo (2015) or newer — covers Ryzen, Threadripper, EPYC
+  - Older CPUs (pre-2013 Intel, pre-2015 AMD) are not supported.
+
+**RAM:**
+- 8 GB minimum (16 GB recommended for 7B+ models)
+- Adds ~1 GB per 1B parameters at Q4 quantization
+
+**Disk space:**
+- ~500 MB for the app + Python + dependencies
+- ~5 GB headroom for models (0.8B–8B GGUF range)
+
+**Internet (one-time only, for setup):**
+- Required for first run to install Python packages and pull the GGUF model
+- After setup: works fully offline
+
+**For Windows users specifically:**
+- If you've never installed Python 3.11, `setup.bat` will install it for you via:
+  - Your system Python (if 3.11 is already installed), or
+  - winget (built into Windows 10 1809+ and Windows 11), or
+  - A portable embeddable Python (last resort, slower)
+- No admin rights required.
+
+**Optional:**
+- `ffmpeg` in your PATH for audio transcription (Whisper)
+- VS Code (for the "open in editor" feature)
+- Microphone (for voice input via Whisper)
+
+---
+
 ## Quick Start
 
 ### 1. Setup (One-time, requires internet)
@@ -45,7 +84,7 @@ chmod +x setup.sh
 
 Or simply double-click `setup.bat` on Windows.
 
-> **Note:** This detects your platform (Windows/Linux/Mac) and installs the appropriate Python (embedded on Windows, system Python + venv on Linux/Mac).
+> **Note:** On Windows, `setup.bat` automatically finds or installs Python 3.11. On Linux/Mac, you need Python 3.11 or newer already installed (run `python3 --version` to check).
 
 ### 2. Add a Model
 
@@ -58,7 +97,7 @@ Recommended to start with one of:
 
 Vision models (Gemma 4 E4B, LLaVA) also supported — place the matching `mmproj*` file alongside the model.
 
-### 2. Run
+### 3. Run
 
 **For Windows users:**
 ```bash
@@ -172,7 +211,6 @@ usb_ai/
       pdf_tool.py         pymupdf + pypdf + OCR fallback
       ppt_tool.py         python-pptx, 3 style presets
       voice_tool.py        Speech-to-text with local Whisper (offline)
-      search_tool.py       DuckDuckGo (3 fallback methods)
       vscode_tool.py       Save code, open in VS Code, fix in place
       image_tool.py        Image → base64 for vision models
       diff_tool.py         Unified diff between two files
@@ -188,13 +226,7 @@ usb_ai/
 
 ---
 
-# USB AI
-
-**100% Local · 100% Private · Runs from a USB Drive**
-
-A portable AI assistant that runs entirely on your machine. No cloud. No internet required after setup. Your data never leaves your device.
-
----
+## Settings Reference
 
 | Setting | What it does |
 |---|---|

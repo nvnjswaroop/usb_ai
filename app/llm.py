@@ -174,6 +174,7 @@ class LLMEngine:
         self._stop_tokens                  = DEFAULT_PROFILE["stop"]
         self._chat_format  : str           = DEFAULT_PROFILE["chat_format"]
         self._n_ctx        : int           = 4096
+
         self._window       : Optional[SlidingWindow] = None
         self._last_hist_len: int           = 0
         # Progress tracking
@@ -451,10 +452,9 @@ class LLMEngine:
 
     def generate_code_files(self, text: str, output_dir: Path) -> list:
         """
-        Extract code blocks from generated text and save them to output_dir.
-        Returns list of dicts: [{"filename": str, "path": str, "status": str}, ...]
-        Reuses _code_blocks() from main module level for compatibility.
-        """
+                Extract code blocks from generated text and save them to output_dir.
+                Returns list of dicts: [{"filename": str, "path": str, "status": str}, ...]
+                """
         from app.tools.vscode_tool import VSCodeTool
         vscode = VSCodeTool(output_dir)
         saved = []

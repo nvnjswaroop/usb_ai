@@ -11,10 +11,9 @@ class PDFTool:
     def extract_text(self, path: str) -> dict:
         p = Path(path.strip())
 
-        # Resolve relative paths
+        # Resolve relative paths to absolute (Documents / Desktop only)
         if not p.is_absolute():
-            for base in [Path.home(), Path.home() / "Documents",
-                         Path.home() / "Desktop", Path("C:/")]:
+            for base in [Path.home() / "Documents", Path.home() / "Desktop"]:
                 c = base / p
                 if c.exists():
                     p = c

@@ -14,12 +14,28 @@ class CodeTool:
         self.timeout = 30  # seconds
 
     def run_python(self, code: str) -> dict:
-        """Execute Python code in a subprocess, return stdout/stderr."""
+        """Execute Python code in a sandboxed subprocess, return stdout/stderr."""
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, encoding="utf-8"
         ) as f:
             f.write(code)
             tmp_path = f.name
+
+        # ponytail: minimal sandbox — temp cwd, stripped env, resource rlimit.
+        # upgrade to seccomp/firejail when running untrusted code from network.
+        sandbox_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONIOENCODING": "utf-8",
+        }
+        sandbox_cwd = tempfile.mkdtemp(prefix="usbai_sandbox_")
+
+        def _rlimit():
+            # ponytail: CPU + memory cap. 2s CPU, 512MB RAM. add when: users hit the cap on legit code.
+            import resource as _r
+            _r.setrlimit(_r.RLIMIT_CPU, (2, 2))
+            if sys.platform != "win32":
+                _r.setrlimit(_r.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
 
         try:
             result = subprocess.run(
@@ -27,7 +43,9 @@ class CodeTool:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
-                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                cwd=sandbox_cwd,
+                env=sandbox_env,
+                preexec_fn=_rlimit if sys.platform != "win32" else None,
             )
             stdout = result.stdout.strip()
             stderr = result.stderr.strip()
@@ -62,5 +80,9 @@ class CodeTool:
         finally:
             try:
                 os.unlink(tmp_path)
+            except Exception:
+                pass
+            try:
+                import shutil; shutil.rmtree(sandbox_cwd, ignore_errors=True)
             except Exception:
                 pass

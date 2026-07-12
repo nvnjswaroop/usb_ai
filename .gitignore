@@ -1,1 +1,15 @@
-python/win/
+output/
+history/
+whisper_models/
+prefeeds/system_prompt.txt
+models/*.gguf
+server.log
+py_path.txt
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.python_packages/
+*.bak
+.DS_Store

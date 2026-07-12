@@ -1,0 +1,38 @@
+# USB AI — consolidated dependencies
+# Pinned versions ensure reproducible installs across platforms.
+#
+# Core (required — server won't start without these)
+fastapi>=0.104,<1.0
+uvicorn[standard]>=0.24,<1.0
+pydantic>=2.0,<3.0
+python-multipart>=0.0.6
+aiofiles>=23.0
+jinja2>=3.1,<4.0
+numpy>=1.20
+
+# PDF / Office
+pypdf>=4.0
+pymupdf>=1.23
+python-pptx>=0.6
+
+# Image
+pillow>=10.0
+
+# LLM inference — pinned to a known-good CPU release (AVX2 baseline).
+# Requires Python 3.11 (cp311). Install via the abetlen CPU wheel index:
+#   pip install llama-cpp-python==0.3.19 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# Do NOT use api.github.com to resolve the version (rate-limited, fails silently).
+# Do NOT fall back to PyPI source build (needs C compiler, fails on most machines).
+llama-cpp-python==0.3.19
+
+# Feature: speech-to-text (optional — voice input disabled if absent)
+openai-whisper>=20231117
+
+# Feature: vision OCR fallback in pdf_tool (optional)
+# pytesseract>=0.3.10
+
+# ── Platform-specific ──────────────────────────────────────────
+# torch is installed separately by setup.sh / setup.bat because the
+# CPU-only wheel comes from a different index URL:
+#   Windows/Linux: pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   macOS:         pip install torch  (default PyPI has Metal builds)

@@ -5,18 +5,47 @@ echo ============================================================
 echo  USB AI - Launcher
 echo ============================================================
 set "USB=%~dp0"
-set "PY=%USB%python\win\python.exe"
-set "PYTHONHOME=%USB%python\win"
-set "PYTHONPATH=%USB%python\win\Lib\site-packages;%USB%app"
-set "PATH=%USB%python\win;%USB%python\win\Scripts;%PATH%"
 
-if not exist "%PY%" ( echo [ERROR] Run setup.bat first. & pause & exit /b 1 )
+REM ── Resolve Python: py_path.txt (from setup.bat) → else fallback chain ──
+set "PY="
+if exist "%USB%py_path.txt" (
+    set /p PY=<"%USB%py_path.txt"
+)
+if defined PY if not exist "!PY!" set "PY="
+
+if not defined PY (
+    REM No setup record — try system Python first, then embeddable
+    for /f "tokens=2" %%v in ('reg query "HKLM\SOFTWARE\Python\PythonCore\3.11\InstallPath" /ve 2^>nul ^| findstr /ri "REG_SZ"') do set "T=%%vpython.exe"
+    if defined T if exist "!T!" set "PY=!T!"
+)
+if not defined PY if exist "%USB%python\win\python.exe" set "PY=%USB%python\win\python.exe"
+
+if not defined PY (
+    echo [ERROR] Run setup.bat first.
+    pause
+    exit /b 1
+)
+echo Using Python: %PY%
+
+REM Only set PYTHONHOME/PYTHONPATH when using the embeddable layout.
+echo %PY% | findstr /i "python\\win" >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHONHOME=%USB%python\win"
+    set "PYTHONPATH=%USB%python\win\Lib\site-packages;%USB%app"
+    set "PATH=%USB%python\win;%USB%python\win\Scripts;%PATH%"
+)
 
 echo Freeing port 8080...
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| find ":8080 "') do (
     taskkill /PID %%a /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
+
+if not exist "%USB%app" (
+    echo [ERROR] app\ directory missing.
+    pause
+    exit /b 1
+)
 
 echo Starting server...
 cd /d "%USB%app"
