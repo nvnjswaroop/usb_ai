@@ -7,6 +7,9 @@ import tempfile
 import os
 from pathlib import Path
 
+from logging_config import getLogger
+_log = getLogger("usbai")
+
 
 class CodeTool:
     def __init__(self, python_path: str = None):
@@ -80,9 +83,6 @@ class CodeTool:
         finally:
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
-            try:
-                import shutil; shutil.rmtree(sandbox_cwd, ignore_errors=True)
-            except Exception:
-                pass
+            except OSError as e:  # ponytail: log unlink failures so stuck tempfiles surface during ops review
+                _log.warning(f"CODE-CLEANUP: unlink {tmp_path}: {e}")
+            import shutil; shutil.rmtree(sandbox_cwd, ignore_errors=True)

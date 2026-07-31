@@ -11,5 +11,7 @@ __pycache__/
 .venv/
 venv/
 .python_packages/
+python/win/Lib/        # installed deps — use a venv instead
+python/                # windows venv tree
 *.bak
 .DS_Store

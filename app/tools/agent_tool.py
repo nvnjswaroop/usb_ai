@@ -7,9 +7,13 @@ import json
 import re
 import os
 import sys
+from pathlib import Path
+
+from logging_config import getLogger
+_log = getLogger("usbai")
+
 # Ensure app/ is in path for schemas import
-_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-_APP_DIR = os.path.dirname(_TOOLS_DIR)
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
@@ -27,13 +31,7 @@ from tools.vscode_tool import VSCodeTool
 from tools.ppt_tool    import PPTTool
 from tools.voice_tool  import VoiceTool
 
-import sys
-if sys.platform == "win32":
-    from pathlib import Path as _P
-    _OUT = _P(__file__).parent.parent / "output"
-else:
-    from pathlib import Path
-    _OUT = Path(__file__).parent.parent / "output"
+_OUT = Path(__file__).parent.parent / "output"
 
 
 # ── Tool Manifest ──────────────────────────────────────────────────────────────
@@ -422,7 +420,10 @@ class AgentTool:
             return str(result), artifacts
         except TypeError as e:
             return f"[ERROR] Missing parameter for {tool_name}: {e}", []
+        except (OSError, ValueError, RuntimeError, IOError) as e:
+            return f"[ERROR] {tool_name} failed: {e}", []
         except Exception as e:
+            _log.error(f"unexpected error in {tool_name}: {e}")
             return f"[ERROR] {tool_name} failed: {e}", []
 
     # ── Main agent loop ────────────────────────────────────────────────────────
@@ -441,6 +442,11 @@ class AgentTool:
         steps: List[Dict] = []
         observations: List[str] = []
         all_artifacts: List[Artifact] = []
+        # ponytail: per-step retry cap — at most one self-correction revise per step.
+        # Without this, the outer for-loop lets the LLM ask for ANOTHER revise every
+        # iteration when the revised tool also errors, blowing past the implicit
+        # "one retry per error" budget and pinning the LLM in a correction spiral.
+        step_retries: Dict[int, int] = {}
 
         for step_num in range(max_steps):
             # Build context with observation history (last 6)
@@ -558,7 +564,11 @@ class AgentTool:
             steps.append(step_entry)
 
             # Self-correction: if tool failed, prompt LLM to revise
-            if "ERROR" in obs[:50] and step_num + 1 < max_steps:
+            # ponytail: hard cap of 1 revise per step — afterwards the outer loop
+            # advances to step_num+1, so the LLM can't recursively retry the same
+            # step indefinitely when its revised tool keeps erroring.
+            if "ERROR" in obs[:50] and step_num + 1 < max_steps \
+                    and step_retries.get(step_num, 0) < 1:
                 correction_prompt = (
                     f"Tool '{tool_name}' failed with error:\n{obs}\n"
                     f"Your plan: {thought}\n"
@@ -590,7 +600,11 @@ class AgentTool:
                             "artifacts": [a.model_dump() for a in arts2],
                         })
                 except Exception:
-                    pass  # Keep original error, continue loop
+                    _log.warning(f"revise failed for step {step_num}: {e}")
+                    # Keep original error, continue loop
+                # ponytail: bump after we've attempted the revise (success or fail).
+                # Acts as the per-step cap and prevents recursive retries.
+                step_retries[step_num] = step_retries.get(step_num, 0) + 1
 
         # Exhausted steps
         final_obs = observations[-1] if observations else "(none)"

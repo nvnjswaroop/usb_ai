@@ -3,10 +3,35 @@
 import os, sys, subprocess, urllib.request, zipfile, shutil, json
 from pathlib import Path
 
-USB   = Path(__file__).resolve().parent
-PY    = Path(r"C:\Users\JYOTHI\AppData\Local\Programs\Python\Python311\python.exe")
-WIN   = USB / "python" / "win"
-WHEEL = USB / "wheels" / "llama_cpp_python-0.3.19-cp311-win_amd64.whl"
+USB = Path(__file__).resolve().parent
+
+def _resolve_python():
+    """Locate the Python interpreter to drive the install.
+
+    Priority: USB_PY env-var > py_path.txt (previous install wrote it) >
+    the hard-coded Windows dev path > sys.executable of the running
+    interpreter (covers Linux/macOS users running setup.py directly).
+    """
+    env = os.environ.get("USB_PY", "").strip()
+    if env and Path(env).exists():
+        return Path(env)
+    cached = USB / "py_path.txt"
+    if cached.exists():
+        cached_path = cached.read_text(encoding="utf-8").strip()
+        if cached_path and Path(cached_path).exists():
+            return Path(cached_path)
+    if sys.platform == "win32":
+        # ponytail: kept for the original Windows-only install path; the
+        # sys.executable fallback below covers every other case.
+        dev = Path(r"C:\Users\JYOTHI\AppData\Local\Programs\Python\Python311\python.exe")
+        if dev.exists():
+            return dev
+    if Path(sys.executable).exists():
+        return Path(sys.executable)
+    print("  [ERROR] No Python interpreter found. Set USB_PY env-var or install Python 3.11+.")
+    sys.exit(1)
+
+PY = _resolve_python()
 
 def msg(c, t): print(f"\033[{c}m{t}\033[0m")
 def ok(t):   msg("92", f"  [OK] {t}")
@@ -45,8 +70,8 @@ ok("pip ready")
 # 3. Base packages
 step(3, "Installing base packages")
 pkgs = ["fastapi", "uvicorn[standard]", "pydantic", "python-multipart",
-        "aiofiles", "pypdf", "pymupdf", "python-pptx", "pillow",
-        "jinja2", "numpy>=1.20"]
+        "pypdf", "pymupdf", "python-pptx>=0.6,<1.0", "pillow",
+        "numpy>=1.20,<3.0"]
 rc, out, err = run([str(PY), "-m", "pip", "install", *pkgs, "--quiet"])
 if rc:
     sys.exit(f"  [ERROR] Base packages failed:\n{err}")
