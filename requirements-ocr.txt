@@ -1,0 +1,2 @@
+# OCR for scanned PDFs (optional)
+pytesseract>=0.3.10

@@ -1,0 +1,11 @@
+# requirements.lock — sha256 pins for wheels in ./wheels/
+#
+# Regenerate with:    python scripts/update_lock.py
+# Pin at install:     see setup.bat (--verify-wheels branch) and setup.sh
+#
+# Format: <sha256>  <wheel-filename>
+# One pin per wheel. setup.{bat,sh} verify each wheel before pip install
+# when this file is present; mismatched wheels are deleted and install aborts.
+#
+# This file is empty until you run fetch_wheels.py + update_lock.py on a
+# networked machine, then commit both the .whl files AND this lock together.

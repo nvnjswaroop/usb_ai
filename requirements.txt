@@ -1,38 +1,30 @@
 # USB AI — consolidated dependencies
 # Pinned versions ensure reproducible installs across platforms.
 #
-# Core (required — server won't start without these)
+# --- Core runtime ---
 fastapi>=0.104,<1.0
 uvicorn[standard]>=0.24,<1.0
 pydantic>=2.0,<3.0
 python-multipart>=0.0.6
-aiofiles>=23.0
-jinja2>=3.1,<4.0
-numpy>=1.20
+numpy>=1.20,<2.0  # upper bound: numpy 2.x broke python-pptx
 
-# PDF / Office
-pypdf>=4.0
-pymupdf>=1.23
-python-pptx>=0.6
+# PDF (pymupdf is the primary reader; pypdf was removed — pymupdf covers all paths)
+pymupdf>=1.23,<2.0
 
 # Image
-pillow>=10.0
+pillow>=10.0,<12.0
 
-# LLM inference — pinned to a known-good CPU release (AVX2 baseline).
-# Requires Python 3.11 (cp311). Install via the abetlen CPU wheel index:
-#   pip install llama-cpp-python==0.3.19 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-# Do NOT use api.github.com to resolve the version (rate-limited, fails silently).
-# Do NOT fall back to PyPI source build (needs C compiler, fails on most machines).
+# Office (used by tools/ppt_tool.py for PowerPoint export)
+python-pptx>=0.6,<1.0
+
+# LLM inference
 llama-cpp-python==0.3.19
 
-# Feature: speech-to-text (optional — voice input disabled if absent)
-openai-whisper>=20231117
+# Speech-to-text (used by tools/voice_tool.py for voice transcription)
+openai-whisper>=20231117,<2025.0
 
-# Feature: vision OCR fallback in pdf_tool (optional)
-# pytesseract>=0.3.10
-
-# ── Platform-specific ──────────────────────────────────────────
-# torch is installed separately by setup.sh / setup.bat because the
-# CPU-only wheel comes from a different index URL:
-#   Windows/Linux: pip install torch --index-url https://download.pytorch.org/whl/cpu
-#   macOS:         pip install torch  (default PyPI has Metal builds)
+# torch is NOT listed here — it is CPU-only and must be installed separately
+# to avoid pulling in a CUDA-enabled wheel that would fail on systems without GPUs:
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Pin to a known-good version when upgrading:
+# torch>=2.0,<3.0

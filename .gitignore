@@ -15,3 +15,6 @@ python/win/Lib/        # installed deps — use a venv instead
 python/                # windows venv tree
 *.bak
 .DS_Store
+
+# USB-AI audit fix 2026-08-07: exclude embeddable install, runtime logs, Windows-generated desktop.ini
+models/desktop.ini
