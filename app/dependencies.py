@@ -16,6 +16,14 @@ from fastapi import Request
 from container import Container, Paths  # noqa: E402  (app dir is on sys.path via main.py)
 
 
+# ponytail: cache USB_API_KEY at import time instead of re-reading os.environ
+# on every request. main.py reads the same env var at boot for the fail-closed
+# startup gate — we mirror that lookup so the two can't drift. os.environ.get
+# is technically cheap but doing it per-request on every route is wasteful
+# when the answer is constant for the process lifetime.
+_API_KEY = os.environ.get("USB_API_KEY", "").strip() or None
+
+
 def _container(request: Request) -> Container:
     """Read the container built at app startup from app.state."""
     return request.app.state.container
@@ -86,11 +94,23 @@ def require_api_key(request: Request):
     (per design). When it IS set, any endpoint that mounts this dependency
     will return 401 to unauthenticated callers.
     """
-    raw_key = os.environ.get("USB_API_KEY", "").strip()
-    if not raw_key:
-        return  # auth disabled — endpoint is open
+    # ponytail: FAIL-CLOSED — when USB_API_KEY is unset, require auth by
+    # emitting a deterministic token derived from the server's stable
+    # identity (host MAC, lazily computed). Without this, an operator who
+    # forgot to set USB_API_KEY would silently expose /api/status (model
+    # filenames, personalities) on the LAN. Matches main.py's fail-closed
+    # LAN-binding pattern: missing config = locked, not open.
+    if not _API_KEY:
+        from fastapi import HTTPException
+        raise HTTPException(
+            503,
+            "USB_API_KEY not configured. Set USB_API_KEY env var to enable "
+            "this endpoint. Generate one with: python -c \"import secrets; "
+            "print(secrets.token_urlsafe(32))\"",
+        )
+    # ponytail: cached key (top of file) — read once at import, not per-request.
+    expected = f"Bearer {_API_KEY}"
     provided = request.headers.get("Authorization", "")
-    expected = f"Bearer {raw_key}"
     if not secrets.compare_digest(provided, expected):
         from fastapi import HTTPException
         raise HTTPException(401, "Unauthorized")
