@@ -1,6 +1,6 @@
-# USB AI
+﻿# USB AI
 
-**100% Local · 100% Private · Runs from a USB Drive**
+**100% Local Â· 100% Private Â· Runs from a USB Drive**
 
 A portable AI assistant that runs entirely on your machine. No cloud. No internet required after setup. Your data never leaves your device.
 
@@ -12,7 +12,7 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 |---|---|
 | **Local LLMs** | GGUF models (Qwen, Llama, Gemma, Mistral, Phi, DeepSeek) via llama-cpp-python |
 | **Vision** | Image analysis with Gemma 4, LLaVA, Moondream, Qwen2-VL, MiniCPM-V |
-| **Sliding Window** | Intelligent context management — oldest messages dropped when context fills up |
+| **Sliding Window** | Intelligent context management â€” oldest messages dropped when context fills up |
 | **File Browser** | Read, write, and browse any file anywhere on your system |
 | **PDF Reader** | Extract text from PDFs (pymupdf), with OCR for scanned pages |
 | **Code Runner** | Write and execute Python instantly, see output inline |
@@ -20,7 +20,7 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 | **Diff Viewer** | Side-by-side comparison of two files |
 | **Calculator** | Math solver with advanced functions (sqrt, sin, cos, log, etc.) |
 | **PPT Generator** | AI generates PowerPoint presentations |
-| **Agent Mode** | Autonomous multi-step task execution (read files → write code → run Python) |
+| **Agent Mode** | Autonomous multi-step task execution (read files â†’ write code â†’ run Python) |
 | **Custom Personas** | Switch between AI character prompts |
 | **Chat Sessions** | Full session history with full-text search |
 | **Export** | Save chats as HTML or Markdown |
@@ -31,14 +31,14 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 ## Requirements
 
 **Operating system:**
-- Windows 10 (1809+) or Windows 11 — setup runs `setup.bat`
-- macOS 11+ or any modern Linux — setup runs `setup.sh`
+- Windows 10 (1809+) or Windows 11 â€” setup runs `setup.bat`
+- macOS 11+ or any modern Linux â€” setup runs `setup.sh`
 
 **CPU:**
 - 64-bit x86 (Intel/AMD)
 - **AVX2 instruction set required.** Most CPUs since 2013 have it:
-  - Intel Haswell (4th gen, 2013) or newer — covers Core i3/i5/i7/i9 from 2013 onwards
-  - AMD Carrizo (2015) or newer — covers Ryzen, Threadripper, EPYC
+  - Intel Haswell (4th gen, 2013) or newer â€” covers Core i3/i5/i7/i9 from 2013 onwards
+  - AMD Carrizo (2015) or newer â€” covers Ryzen, Threadripper, EPYC
   - Older CPUs (pre-2013 Intel, pre-2015 AMD) are not supported.
 
 **RAM:**
@@ -47,10 +47,10 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 
 **Disk space:**
 - ~500 MB for the app + Python + dependencies
-- ~5 GB headroom for models (0.8B–8B GGUF range)
+- ~5 GB headroom for models (0.8Bâ€“8B GGUF range)
 
 **Python version:**
-- **Any modern Python 3.10+ works.** The LLM runtime is no longer a pip package — `scripts/fetch_llama.py` downloads the official prebuilt `llama-server` binary from ggml's GitHub releases (sha256-pinned in `llama_server.lock`), so there are no cp3xx wheel constraints and nothing is ever compiled.
+- **Any modern Python 3.10+ works.** The LLM runtime is no longer a pip package â€” `scripts/fetch_llama.py` downloads the official prebuilt `llama-server` binary from ggml's GitHub releases (sha256-pinned in `llama_server.lock`), so there are no cp3xx wheel constraints and nothing is ever compiled.
 - `setup.bat` auto-installs an embeddable Python on Windows if you don't have one.
 - Legacy escape hatch: set `USB_AI_BACKEND=inline` to use the old in-process engine (requires Python 3.11 + `llama-cpp-python==0.3.19`; not installed by default).
 
@@ -59,10 +59,10 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 - After setup: works fully offline
 
 **For Windows users specifically:**
-- If you've never installed Python, `setup.bat` will install a portable embeddable Python for you — no admin rights required.
+- If you've never installed Python, `setup.bat` will install a portable embeddable Python for you â€” no admin rights required.
 
 **Optional:**
-- `pip install -r requirements-ocr.txt` — OCR for scanned PDFs (requires pytesseract + Tesseract binary)
+- `pip install -r requirements-ocr.txt` â€” OCR for scanned PDFs (requires pytesseract + Tesseract binary)
 - `ffmpeg` in your PATH for audio transcription (Whisper)
 - VS Code (for the "open in editor" feature)
 - Microphone (for voice input via Whisper)
@@ -93,11 +93,11 @@ Or simply double-click `setup.bat` on Windows.
 Drop any `.gguf` model file into the `models/` folder.
 
 Recommended to start with one of:
-- **Qwen 2.5 7B** — fast, excellent quality, good code understanding
-- **Llama 3.1 8B** — versatile, widely supported
-- **Phi-3 Mini** — smallest footprint, surprisingly capable
+- **Qwen 2.5 7B** â€” fast, excellent quality, good code understanding
+- **Llama 3.1 8B** â€” versatile, widely supported
+- **Phi-3 Mini** â€” smallest footprint, surprisingly capable
 
-Vision models (Gemma 4 E4B, LLaVA) also supported — place the matching `mmproj*` file alongside the model.
+Vision models (Gemma 4 E4B, LLaVA) also supported â€” place the matching `mmproj*` file alongside the model.
 
 ### 3. Run
 
@@ -147,20 +147,20 @@ Run `download_whisper.bat` once to download the Whisper STT model. Choose `tiny`
 
 Before sending a message, enable chips to unlock extra capabilities:
 
-- **Run Code** — Automatically execute Python code blocks in the response
-- **Save Code** — Save code blocks to `output/` and open in VS Code
-- **Agent** — Enable autonomous multi-step tool chaining (opens a second AI loop)
+- **Run Code** â€” Automatically execute Python code blocks in the response
+- **Save Code** â€” Save code blocks to `output/` and open in VS Code
+- **Agent** â€” Enable autonomous multi-step tool chaining (opens a second AI loop)
 
 ### Personas
 
 Use the Personas dropdown to switch between:
 
-- **Chat** — General helpful assistant
-- **Coder** — Expert software engineer, adds `# filename:` hints to code
-- **Teacher** — Patient step-by-step explanations
-- **Doctor** — Medical information (always recommends seeing a real doctor)
-- **Math** — Shows all working step by step
-- **Vision** — Image analysis mode
+- **Chat** â€” General helpful assistant
+- **Coder** â€” Expert software engineer, adds `# filename:` hints to code
+- **Teacher** â€” Patient step-by-step explanations
+- **Doctor** â€” Medical information (always recommends seeing a real doctor)
+- **Math** â€” Shows all working step by step
+- **Vision** â€” Image analysis mode
 
 ### File Browser
 
@@ -182,20 +182,20 @@ python scripts/fetch_llama.py --list        # see the latest prebuilt assets
 python scripts/fetch_llama.py --variant cpu --write-lock
 ```
 
-No compilers involved — it's a sha256-verified download of ggml's own release binary.
+No compilers involved â€” it's a sha256-verified download of ggml's own release binary.
 
 ---
 
 ## Troubleshooting
 
 **Server won't start / port 8080 in use:**
-Run `launch.bat` again — it will kill any existing process on port 8080 first.
+Run `launch.bat` again â€” it will kill any existing process on port 8080 first.
 
 **Model fails to load with KV cache error:**
 This means your model was built for a different context size than requested. The app now auto-detects the model's context size from the GGUF header and caps it automatically. If the error persists, try a different model file or reinstall `llama-cpp-python` via `update_llama.bat`.
 
 **No voice from TTS on Windows:**
-Make sure a TTS voice is installed in Windows Settings → Accessibility → Speech → Add voices.
+Make sure a TTS voice is installed in Windows Settings â†’ Accessibility â†’ Speech â†’ Add voices.
 
 **No voice from TTS on Linux:**
 Install espeak: `sudo apt install espeak` (or `espeak-ng`)
@@ -203,14 +203,10 @@ Install espeak: `sudo apt install espeak` (or `espeak-ng`)
 **Whisper transcription fails:**
 Make sure `ffmpeg` is installed and in your PATH. Download from https://ffmpeg.org
 
-**Manual `pip install` fails on Windows with "Microsoft Visual C++ 14.0 required":**
-This means pip tried to build `llama-cpp-python` from source because it didn't find a prebuilt wheel. **Always use `setup.bat`** instead of manual `pip install` — the script explicitly installs `llama-cpp-python` from the abetlen CPU wheel index (`https://abetlen.github.io/llama-cpp-python/whl/cpu`), which only ships prebuilt wheels for Python 3.11 (cp311). If you need to install manually, run:
 
 ```
-pip install llama-cpp-python==0.3.19 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 ```
 
-You can verify the install worked by running `python -c "import llama_cpp; print('ok')"` — if it doesn't error, you're good.
 
 ---
 
@@ -224,7 +220,7 @@ app/
   container.py         Tool factories (DI container)
   dependencies.py      FastAPI Depends() surface
   sessions.py          SessionStore (disk + index + caches)
-  artifacts.py         StreamingArtifactExtractor (code-block → Artifact)
+  artifacts.py         StreamingArtifactExtractor (code-block â†’ Artifact)
   llm.py               LLMEngine + SlidingWindow
   schemas.py           Pydantic models (Artifact, AgentResult, ToolCall)
   routers/
@@ -246,7 +242,7 @@ app/
     ppt_tool.py        python-pptx, 3 style presets
     voice_tool.py      TTS (token-bucket + 4-worker emit pool) + Whisper STT
     vscode_tool.py     save + open + fix-in-place
-    image_tool.py       image → base64 for vision models
+    image_tool.py       image â†’ base64 for vision models
     diff_tool.py        unified diff
     export_tool.py     HTML/Markdown session export
     agent_tool.py       autonomous multi-step agent with JSON actions
@@ -266,45 +262,45 @@ All endpoints are under `http://localhost:8080`. Auth is required when `USB_API_
 
 | Method | Path | Purpose | Auth | Rate Limit | Mutates |
 |---|---|---|---|---|---|
-| GET | `/` | Chat UI | — | — | — |
-| GET | `/api/status` | Model loaded, available models, personalities | — | — | — |
-| GET | `/api/health` | Liveness: model loaded, disk free, uptime | — | — | — |
-| GET | `/api/models` | List `.gguf` files in `models/` | — | — | — |
-| GET | `/api/models/progress` | Model load progress + last log line | — | — | — |
-| POST | `/api/models/load` | Load a model into memory | **Yes** | — | — |
-| POST | `/api/sessions/new` | Reset in-memory sliding window | **Yes** | — | — |
-| GET | `/api/sessions` | List sessions (index, cached) | **Yes** | — | — |
-| GET | `/api/sessions/{sid}` | Full session JSON | **Yes** | — | — |
-| DELETE | `/api/sessions/{sid}` | Delete a session file | **Yes** | — | ✓ |
-| POST | `/api/sessions/{sid}/rename` | Update session title | **Yes** | — | ✓ |
-| POST | `/api/sessions/{sid}/summarise` | Run summarisation prompt | **Yes** | — | — |
-| GET | `/api/sessions/search/{query}` | Full-text search in session history | **Yes** | 30/min | — |
-| POST | `/api/chat/stream` | SSE streaming chat | **Yes** | 30/min | ✓ |
-| POST | `/api/calc` | Safe AST-walked arithmetic | — | — | — |
-| POST | `/api/export` | Export session as HTML or Markdown | **Yes** | 30/min | — |
-| POST | `/api/diff/files` | Unified diff between two files | **Yes** | — | — |
-| POST | `/api/files/read` | Read a file via `_resolve` | **Yes** | — | — |
-| POST | `/api/files/write` | Write a file via `_resolve` | **Always** | — | ✓ |
-| GET | `/api/files/browse` | List a directory | **Yes** | 30/min | — |
-| GET | `/api/files/drives` | List drives (Windows) or root dirs | — | — | — |
-| POST | `/api/files/upload` | Stream-upload to `output/` (10MB cap) | **Yes** | — | ✓ |
-| POST | `/api/files/debug` | AI fix-in-place on a file | **Always** | — | ✓ |
-| POST | `/api/pdf/extract` | Extract text from PDF path | **Yes** | — | — |
-| POST | `/api/pdf/upload` | Upload PDF, extract, delete temp | **Yes** | — | — |
-| POST | `/api/image/upload` | Upload image, return base64 for vision | **Yes** | — | — |
-| POST | `/api/code/run` | Execute Python | **Yes** | 30/min | — |
-| POST | `/api/code/save` | Save code to `output/` and open VS Code | — | — | ✓ |
-| GET | `/api/preview/{filename}` | Render `output/` file as HTML | — | — | — |
-| GET | `/api/outputs` | List files in `output/` | — | — | — |
-| GET | `/api/outputs/download/{filename}` | Download `output/` file | — | — | — |
-| POST | `/api/voice/speak` | Text-to-speech | — | — | — |
-| GET | `/api/voice/voices` | List available TTS voices | — | — | — |
-| POST | `/api/voice/transcribe` | Whisper STT (stream to `whisper_models/`) | **Yes** | — | — |
-| POST | `/api/ppt/generate` | Generate PowerPoint from topic | **Yes** | — | — |
-| GET | `/api/ppt/download/{filename}` | Download generated `.pptx` | — | — | — |
-| POST | `/api/agent/execute` | Autonomous agent loop (opt-in) | **Yes** | — | — |
-| POST | `/api/v1/chat/completions` | OpenAI-compatible non-streaming chat | **Yes** | 30/min | ✓ |
-| GET | `/api/v1/models` | OpenAI-compatible model list | **Yes** | 30/min | — |
+| GET | `/` | Chat UI | â€” | â€” | â€” |
+| GET | `/api/status` | Model loaded, available models, personalities | â€” | â€” | â€” |
+| GET | `/api/health` | Liveness: model loaded, disk free, uptime | â€” | â€” | â€” |
+| GET | `/api/models` | List `.gguf` files in `models/` | â€” | â€” | â€” |
+| GET | `/api/models/progress` | Model load progress + last log line | â€” | â€” | â€” |
+| POST | `/api/models/load` | Load a model into memory | **Yes** | â€” | â€” |
+| POST | `/api/sessions/new` | Reset in-memory sliding window | **Yes** | â€” | â€” |
+| GET | `/api/sessions` | List sessions (index, cached) | **Yes** | â€” | â€” |
+| GET | `/api/sessions/{sid}` | Full session JSON | **Yes** | â€” | â€” |
+| DELETE | `/api/sessions/{sid}` | Delete a session file | **Yes** | â€” | âœ“ |
+| POST | `/api/sessions/{sid}/rename` | Update session title | **Yes** | â€” | âœ“ |
+| POST | `/api/sessions/{sid}/summarise` | Run summarisation prompt | **Yes** | â€” | â€” |
+| GET | `/api/sessions/search/{query}` | Full-text search in session history | **Yes** | 30/min | â€” |
+| POST | `/api/chat/stream` | SSE streaming chat | **Yes** | 30/min | âœ“ |
+| POST | `/api/calc` | Safe AST-walked arithmetic | â€” | â€” | â€” |
+| POST | `/api/export` | Export session as HTML or Markdown | **Yes** | 30/min | â€” |
+| POST | `/api/diff/files` | Unified diff between two files | **Yes** | â€” | â€” |
+| POST | `/api/files/read` | Read a file via `_resolve` | **Yes** | â€” | â€” |
+| POST | `/api/files/write` | Write a file via `_resolve` | **Always** | â€” | âœ“ |
+| GET | `/api/files/browse` | List a directory | **Yes** | 30/min | â€” |
+| GET | `/api/files/drives` | List drives (Windows) or root dirs | â€” | â€” | â€” |
+| POST | `/api/files/upload` | Stream-upload to `output/` (10MB cap) | **Yes** | â€” | âœ“ |
+| POST | `/api/files/debug` | AI fix-in-place on a file | **Always** | â€” | âœ“ |
+| POST | `/api/pdf/extract` | Extract text from PDF path | **Yes** | â€” | â€” |
+| POST | `/api/pdf/upload` | Upload PDF, extract, delete temp | **Yes** | â€” | â€” |
+| POST | `/api/image/upload` | Upload image, return base64 for vision | **Yes** | â€” | â€” |
+| POST | `/api/code/run` | Execute Python | **Yes** | 30/min | â€” |
+| POST | `/api/code/save` | Save code to `output/` and open VS Code | â€” | â€” | âœ“ |
+| GET | `/api/preview/{filename}` | Render `output/` file as HTML | â€” | â€” | â€” |
+| GET | `/api/outputs` | List files in `output/` | â€” | â€” | â€” |
+| GET | `/api/outputs/download/{filename}` | Download `output/` file | â€” | â€” | â€” |
+| POST | `/api/voice/speak` | Text-to-speech | â€” | â€” | â€” |
+| GET | `/api/voice/voices` | List available TTS voices | â€” | â€” | â€” |
+| POST | `/api/voice/transcribe` | Whisper STT (stream to `whisper_models/`) | **Yes** | â€” | â€” |
+| POST | `/api/ppt/generate` | Generate PowerPoint from topic | **Yes** | â€” | â€” |
+| GET | `/api/ppt/download/{filename}` | Download generated `.pptx` | â€” | â€” | â€” |
+| POST | `/api/agent/execute` | Autonomous agent loop (opt-in) | **Yes** | â€” | â€” |
+| POST | `/api/v1/chat/completions` | OpenAI-compatible non-streaming chat | **Yes** | 30/min | âœ“ |
+| GET | `/api/v1/models` | OpenAI-compatible model list | **Yes** | 30/min | â€” |
 
 *Auth*: **Yes** = requires `USB_API_KEY` when set. **Always** = always requires `USB_API_KEY` even in local-only mode. **opt-in** = route not registered unless env var is set (returns 404).
 
@@ -314,10 +310,10 @@ USB AI exposes two endpoints under `/api/v1/*` that mirror the OpenAI Chat Compl
 
 | Endpoint | Behaviour |
 |---|---|
-| `POST /api/v1/chat/completions` | Standard OpenAI request/response. Non-streaming only — `stream: true` returns 400. Reuses `LLMEngine.stream_tokens` and the sliding-window token counter (the same code path as `/api/chat/stream`). Token counts use the internal `_count` already used for context budgeting — no extra tokenizer dependency. |
-| `GET /api/v1/models` | Returns `{object: "list", data: [...]}` derived from `paths.models.glob("*.gguf")` — same source as `/api/models`, reshaped to OpenAI's list-of-models format. |
+| `POST /api/v1/chat/completions` | Standard OpenAI request/response. Non-streaming only â€” `stream: true` returns 400. Reuses `LLMEngine.stream_tokens` and the sliding-window token counter (the same code path as `/api/chat/stream`). Token counts use the internal `_count` already used for context budgeting â€” no extra tokenizer dependency. |
+| `GET /api/v1/models` | Returns `{object: "list", data: [...]}` derived from `paths.models.glob("*.gguf")` â€” same source as `/api/models`, reshaped to OpenAI's list-of-models format. |
 
-Auth: inherits `/api/chat/stream` policy exactly — `USB_API_KEY` opt-in (open on loopback when unset, fail-closed on LAN). CyberMatrix clients should send whatever Bearer token they already have configured in `config.yaml`; the comparison uses `secrets.compare_digest` (constant-time). Streaming on this endpoint is deferred — `/api/chat/stream` is the SSE path and lives in our own shape; ~30 lines to bridge to OpenAI chunks when a client needs it.
+Auth: inherits `/api/chat/stream` policy exactly â€” `USB_API_KEY` opt-in (open on loopback when unset, fail-closed on LAN). CyberMatrix clients should send whatever Bearer token they already have configured in `config.yaml`; the comparison uses `secrets.compare_digest` (constant-time). Streaming on this endpoint is deferred â€” `/api/chat/stream` is the SSE path and lives in our own shape; ~30 lines to bridge to OpenAI chunks when a client needs it.
 
 ---
 
@@ -333,16 +329,16 @@ Auth: inherits `/api/chat/stream` policy exactly — `USB_API_KEY` opt-in (open 
 
 | Dependency | License | Obligation |
 |---|---|---|
-| Most deps (fastapi, uvicorn, pydantic, llama-cpp-python, python-pptx, pillow, whisper…) | MIT / Apache-2.0 / BSD | None for normal use |
-| **PyMuPDF** (`pymupdf`) | **AGPL-3.0** | If you distribute this app to others as a product (or serve it commercially without releasing source), PyMuPDF requires your source be AGPL too — or a commercial pymupdf license from Artifex. Personal/local use is unaffected. Alternative: swap `tools/pdf_tool.py` to `pypdf` (BSD) if you need permissive-only distribution. |
+| Most deps (fastapi, uvicorn, pydantic, llama-cpp-python, python-pptx, pillow, whisperâ€¦) | MIT / Apache-2.0 / BSD | None for normal use |
+| **PyMuPDF** (`pymupdf`) | **AGPL-3.0** | If you distribute this app to others as a product (or serve it commercially without releasing source), PyMuPDF requires your source be AGPL too â€” or a commercial pymupdf license from Artifex. Personal/local use is unaffected. Alternative: swap `tools/pdf_tool.py` to `pypdf` (BSD) if you need permissive-only distribution. |
 
 ## Code Style: the # ponytail: Convention
 
-`# ponytail: <why>, <when to upgrade>` comments appear throughout the codebase. They document **deliberate shortcuts** — decisions made for good reasons that the author knows are non-ideal. They are the living spec of the codebase.
+`# ponytail: <why>, <when to upgrade>` comments appear throughout the codebase. They document **deliberate shortcuts** â€” decisions made for good reasons that the author knows are non-ideal. They are the living spec of the codebase.
 
 Example:
 ```python
-# ponytail: in-process limiter, single-instance only — multi-worker uvicorn
+# ponytail: in-process limiter, single-instance only â€” multi-worker uvicorn
 # would need slowapi or shared state.
 rate_limiter = RateLimiter(max_per_minute=30)
 ```

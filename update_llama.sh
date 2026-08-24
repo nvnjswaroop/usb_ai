@@ -1,36 +1,34 @@
 #!/bin/bash
-# USB AI - Update llama-cpp-python
-
-LLAMA_CPP_VERSION="0.3.19"
+# USB AI - Update LLM runtime (llama-server)
+# Downloads the pinned official prebuilt binary. No compiling.
+VARIANT="${1:-cpu}"
 
 echo "============================================================"
-echo "USB AI - Update llama-cpp-python"
+echo "USB AI - Update llama-server runtime ($VARIANT)"
 echo "============================================================"
-echo
 
-# Activate virtual environment if it exists
-if [ -d "venv" ]; then
-    if [ -f "venv/Scripts/activate" ]; then
-        source venv/Scripts/activate
-    elif [ -f "venv/bin/activate" ]; then
-        source venv/bin/activate
+PY=""
+for candidate in python3 python; do
+    if command -v "$candidate" &>/dev/null && "$candidate" -c 'import sys; sys.exit(0)' 2>/dev/null; then
+        PY="$candidate"; break
     fi
+done
+if [ -z "$PY" ]; then echo "[ERROR] Run setup.sh first."; exit 1; fi
+
+echo "Current binary:"
+if [ -x "bin/llama/llama-server" ]; then
+    bin/llama/llama-server --version 2>/dev/null | head -1 || true
+else
+    echo "  none installed yet"
 fi
 
-echo "Current llama-cpp-python version:"
-python -m pip show llama-cpp-python 2>/dev/null | grep Version || echo "Not installed"
-
-echo "Updating llama-cpp-python to v$LLAMA_CPP_VERSION (CPU wheel)..."
-python -m pip install "llama-cpp-python==$LLAMA_CPP_VERSION" \
-    --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-    --no-warn-script-location --quiet
-
-if [ $? -eq 0 ]; then
-    echo "llama-cpp-python updated successfully!"
-    echo "New version:"
-    python -m pip show llama-cpp-python 2>/dev/null | grep Version || echo "Installation successful"
-else
-    echo "[ERROR] Failed to update llama-cpp-python."
-    echo "  Try manually: python -m pip install llama-cpp-python==$LLAMA_CPP_VERSION --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu"
+echo "Fetching pinned build..."
+"$PY" scripts/fetch_llama.py --variant "$VARIANT" "${@:2}"
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Update failed. See output above."
     exit 1
 fi
+
+echo "New binary:"
+bin/llama/llama-server --version 2>/dev/null | head -1
+echo "Done! Restart ./launch.sh to use it."

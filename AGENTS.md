@@ -35,8 +35,8 @@
 
 ## Tests
 
-Seven files, stdlib `unittest` (fastapi/starlette TestClient suites also need
-`httpx` — vendor it into `wheels/` so they run on the shipped interpreter):
+Seven files+, stdlib `unittest` (httpx ships in core requirements.txt, so
+starlette's TestClient works everywhere including CI):
 
 ```
 python -m unittest discover -s tests -p "test_*.py"   # runs everything

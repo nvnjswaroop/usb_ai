@@ -25,3 +25,6 @@ python/
 models/desktop.ini
 
 python_install*.log
+
+# Claude Code local settings — machine-specific by design, never commit
+.claude/settings.local.json
