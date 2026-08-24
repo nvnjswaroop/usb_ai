@@ -100,9 +100,12 @@ def build_default(paths: Optional[Paths] = None) -> Container:
     backend = (_os.environ.get("USB_AI_BACKEND", "server").strip().lower()
                or "server")
     if backend == "server":
-        from llm_server import ServerEngine
+        from llm_server import ServerEngine, find_server_binary
+        _bin = find_server_binary()
         llm = ServerEngine(paths.models, paths.root / "prefeeds")
-        _note = f"llama-server sidecar (binary: {llm.manager.binary})"
+        _note = (f"llama-server ({_bin.name})" if _bin else
+                 "llama-server binary NOT FOUND — /api/models/load will fail "
+                 "until scripts/fetch_llama.py runs")
     else:
         llm = LLMEngine(paths.models, paths.root / "prefeeds")
         _note = "in-process llama-cpp-python"

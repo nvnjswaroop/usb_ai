@@ -25,12 +25,16 @@ httpx>=0.27,<2.0  # starlette TestClient — required by the test suite
 pymupdf>=1.23,<2.0
 
 # Image
-pillow>=10.0,<12.0
+# ponytail: >=12.3 — pip-audit found 25 PYSEC advisories against the old
+# <12 line (fixed in 12.1.1/12.2/12.3). python-pptx interop verified locally.
+pillow>=12.3,<13
 
 # Office (used by tools/ppt_tool.py for PowerPoint export)
 python-pptx>=0.6,<1.0
 
 # Speech-to-text (used by tools/voice_tool.py for voice transcription)
+# ponytail: NO upper bound — whisper uses date-style versions where
+# "<2025.0" numerically excludes EVERY release (20231117 > 2025.0).
 # @feature:voice:start
-openai-whisper>=20231117,<2025.0
+openai-whisper>=20231117
 # @feature:voice:end

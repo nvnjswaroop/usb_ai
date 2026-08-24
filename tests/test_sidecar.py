@@ -198,9 +198,19 @@ class TestBackendSelection(TestCase):
         c = self._bd()
         import llm_server as ls
         self.assertIsInstance(c.llm, ls.ServerEngine)
-        # binary is pinned in bin/llama/ by fetch_llama.py and committed with
-        # the repo — the default backend must always be runnable.
-        self.assertTrue(c.llm.manager.binary.exists())
+
+    def test_missing_binary_fails_loud_at_load(self):
+        """Lazy resolution: boot succeeds headless (CI/ubuntu), but the first
+        manager access - i.e. /api/models/load - raises the actionable
+        RuntimeError instead of something vague later."""
+        import os
+        with patch.dict(os.environ, {
+                "USB_AI_BACKEND": "server",
+                "USB_AI_LLAMA_DIR": str(_APP.parent / "bin" / "nope")}):
+            c = self._bd()
+            with self.assertRaises(RuntimeError) as cm:
+                _ = c.llm.manager  # noqa: B018 - property triggers resolve
+            self.assertIn("llama-server", str(cm.exception))
 
     def test_inline_requires_explicit_env(self):
         try:
@@ -212,17 +222,6 @@ class TestBackendSelection(TestCase):
             c = self._bd()
             import llm as llm_mod
             self.assertIsInstance(c.llm, llm_mod.LLMEngine)
-
-    def test_server_backend_selected_without_binary_fails_loud(self):
-        import os
-        # ponytail: point the explicit dir override at a nonexistent path so
-        # the probe is deterministic even on machines where bin/llama exists.
-        with patch.dict(os.environ, {
-                "USB_AI_BACKEND": "server",
-                "USB_AI_LLAMA_DIR": str(_APP.parent / "bin" / "nope")}):
-            with self.assertRaises(RuntimeError) as cm:
-                self._bd()
-            self.assertIn("llama-server", str(cm.exception))
 
 
 if __name__ == "__main__":

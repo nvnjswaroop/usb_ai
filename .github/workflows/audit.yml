@@ -7,11 +7,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # ponytail: pip-audit >= 2.10 removed --fail-level and rejects it as an
+      # unknown arg (that silently broke this job). Default behaviour = fail
+      # on ANY known vulnerability, which is the policy we actually want.
       - run: pip install pip-audit
-      - run: pip-audit -r requirements.txt --fail-level HIGH
+      - run: pip-audit -r requirements.txt
       # ponytail: optional extras get audited too — they ship in the same box.
-      - run: pip-audit -r requirements-ocr.txt --fail-level HIGH || true
-      - run: pip-audit -r requirements-psutil.txt --fail-level HIGH || true
+      - run: pip-audit -r requirements-ocr.txt || true
+      - run: pip-audit -r requirements-psutil.txt || true
 
   tests:
     runs-on: ubuntu-latest

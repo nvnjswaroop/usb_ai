@@ -207,19 +207,31 @@ class ServerEngine:
         self._phase = ""
         self._is_vision = False
         self._n_ctx = 4096
-        self.manager = manager or self._default_manager()
+        # ponytail: manager resolution is LAZY (first .manager access, which
+        # happens at load_model_sync). Resolving eagerly in __init__ made the
+        # app un-importable on machines without a platform-matching binary
+        # (CI/ubuntu vs the committed win-x64 exe) — 30 tests died at import.
+        # Missing binary still fails LOUD, just at /api/models/load where an
+        # actionable message belongs.
+        self._manager = manager
         self._window = None  # lazy SlidingWindow (imported lazily: no hard dep)
         self._load_start = 0.0
         self._model_size_mb = 0.0
+
+    @property
+    def manager(self) -> SidecarManager:
+        if self._manager is None:
+            self._manager = self._default_manager()
+        return self._manager
 
     @staticmethod
     def _default_manager() -> SidecarManager:
         binary = find_server_binary()
         if binary is None:
             raise RuntimeError(
-                "llama-server binary not found. Run scripts/fetch_llama.py "
-                "(or setup.bat) to place it in bin/llama/, or set "
-                "USB_AI_LLAMA_SERVER.")
+                "llama-server binary not found for this platform. Run "
+                "scripts/fetch_llama.py (or setup.bat) to place it in "
+                "bin/llama/, or set USB_AI_LLAMA_SERVER.")
         return SidecarManager(binary)
 
     # ── state ──────────────────────────────────────────────────────────────
