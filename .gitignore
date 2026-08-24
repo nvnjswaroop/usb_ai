@@ -11,10 +11,17 @@ __pycache__/
 .venv/
 venv/
 .python_packages/
-python/win/Lib/        # installed deps — use a venv instead
-python/                # windows venv tree
+
+# Windows embeddable Python runtime — downloaded by setup.bat, never committed.
+# ponytail: NEVER put a trailing comment on a pattern line — git treats the
+# whole line as the pattern ("python/  # comment" matches nothing), which is
+# exactly how site-packages once nearly got committed wholesale.
+python/
+
 *.bak
 .DS_Store
 
 # USB-AI audit fix 2026-08-07: exclude embeddable install, runtime logs, Windows-generated desktop.ini
 models/desktop.ini
+
+python_install*.log

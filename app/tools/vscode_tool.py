@@ -6,6 +6,9 @@ VS Code Tool
 """
 import os
 import re
+from logging_config import getLogger
+_log = getLogger("usbai")
+
 import subprocess
 import shutil
 from pathlib import Path
@@ -51,15 +54,17 @@ class VSCodeTool:
             try:
                 subprocess.Popen([vscode, str(dest)], shell=False)
                 return {"status": "ok", "path": str(dest), "opened_in_vscode": True}
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 return {"status": "ok", "path": str(dest), "opened_in_vscode": False,
                         "note": f"File saved but VS Code failed to open: {e}"}
         else:
             # Open with default app as fallback
+            # ponytail: OSError only — startfile raises OSError on absent file
+            # association; we don't catch arbitrary Exception (per AGENTS.md).
             try:
                 os.startfile(str(dest))
-            except Exception:
-                pass
+            except OSError as e:
+                _log.warning(f"VSCODE-OPEN: startfile failed {dest}: {e}")
             return {"status": "ok", "path": str(dest), "opened_in_vscode": False,
                     "note": "VS Code not found — file saved and opened with default app"}
 
@@ -80,23 +85,29 @@ class VSCodeTool:
             return {"status": "error", "message": f"File not found: {file_path}"}
 
         # Backup original
+        # ponytail: OSError only — read/write failures on the backup file. We do
+        # not catch arbitrary Exception per AGENTS.md; backup is best-effort but
+        # logged so a user can see why the .bak didn't appear.
         backup = p.with_suffix(p.suffix + ".bak")
         try:
             backup.write_bytes(p.read_bytes())
-        except Exception:
-            pass  # backup is best-effort
+        except OSError as e:
+            _log.warning(f"VSCODE-BACKUP: backup skipped for {p}: {e}")
 
         try:
             p.write_text(fixed_code, encoding="utf-8")
-        except Exception as e:
+        except (OSError, ValueError) as e:
             return {"status": "error", "message": f"Could not write fix: {e}"}
 
         vscode = _find_vscode()
         if vscode:
             try:
                 subprocess.Popen([vscode, str(p)])
-            except Exception:
-                pass
+            except (OSError, ValueError) as e:
+                # ponytail: narrow catches per AGENTS.md — Popen spawn can fail
+                # with FileNotFoundError (subclass of OSError) or ValueError
+                # (bad args). Don't mask other failures as silent.
+                _log.warning(f"VSCODE-REOPEN: reopen failed {p}: {e}")
 
         return {
             "status":   "ok",

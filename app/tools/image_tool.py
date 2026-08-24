@@ -4,6 +4,7 @@ Supports: LLaVA, Gemma 3/4, any multimodal GGUF with mmproj
 """
 import base64
 import struct
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -34,7 +35,7 @@ class ImageTool:
         p = Path(filename)
         if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
             return {"status": "error", "message": f"Unsupported format: {p.suffix}"}
-        dest = self.output_dir / f"img_{int(__import__('time').time())}{p.suffix.lower()}"
+        dest = self.output_dir / f"img_{int(time.time())}{p.suffix.lower()}"
         dest.write_bytes(data)
         return {
             "status":   "ok",

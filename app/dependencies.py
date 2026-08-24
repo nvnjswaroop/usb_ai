@@ -10,18 +10,25 @@ from __future__ import annotations
 
 import os
 import secrets
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 # ponytail: lazy lookup — avoids a circular import between container/main/dependencies.
 from container import Container, Paths  # noqa: E402  (app dir is on sys.path via main.py)
 
 
-# ponytail: cache USB_API_KEY at import time instead of re-reading os.environ
-# on every request. main.py reads the same env var at boot for the fail-closed
-# startup gate — we mirror that lookup so the two can't drift. os.environ.get
-# is technically cheap but doing it per-request on every route is wasteful
-# when the answer is constant for the process lifetime.
-_API_KEY = os.environ.get("USB_API_KEY", "").strip() or None
+def get_api_key() -> str | None:
+    """Canonical USB_API_KEY lookup — the single source of truth for auth.
+
+    Read by BOTH main.py's middleware and require_api_key() below, so the two
+    layers cannot drift.
+
+    ponytail: read per-call instead of caching at import. os.environ.get is a
+    dict lookup; the old double-cache (main._API_KEY AND dependencies._API_KEY,
+    each read once at boot) meant tests patching one global silently left the
+    other stale — that drift produced two contradictory auth policies
+    (middleware open-when-unset vs dependency 503-when-unset).
+    """
+    return os.environ.get("USB_API_KEY", "").strip() or None
 
 
 def _container(request: Request) -> Container:
@@ -88,31 +95,44 @@ def get_rate_limiter(request: Request):
 
 
 def require_api_key(request: Request):
-    """Require a valid API key for the current request.
+    """Verify the Bearer key when USB_API_KEY is configured.
 
-    When USB_API_KEY is not set, all endpoints are intentionally open
-    (per design). When it IS set, any endpoint that mounts this dependency
-    will return 401 to unauthenticated callers.
+    Policy — single source of truth, identical to main.py's middleware:
+      - Key unset -> allow. Loopback-open by design (README Quick Start never
+        sets a key; launch.bat health-checks /api/status without one).
+        Residual hardening lives elsewhere: the middleware fail-closes
+        filesystem-mutating prefixes (/api/files/write|debug), and startup
+        refuses non-loopback binds without a key.
+      - Key set   -> constant-time `Authorization: Bearer <key>` check.
     """
-    # ponytail: FAIL-CLOSED — when USB_API_KEY is unset, require auth by
-    # emitting a deterministic token derived from the server's stable
-    # identity (host MAC, lazily computed). Without this, an operator who
-    # forgot to set USB_API_KEY would silently expose /api/status (model
-    # filenames, personalities) on the LAN. Matches main.py's fail-closed
-    # LAN-binding pattern: missing config = locked, not open.
-    if not _API_KEY:
-        from fastapi import HTTPException
-        raise HTTPException(
-            503,
-            "USB_API_KEY not configured. Set USB_API_KEY env var to enable "
-            "this endpoint. Generate one with: python -c \"import secrets; "
-            "print(secrets.token_urlsafe(32))\"",
-        )
-    # ponytail: cached key (top of file) — read once at import, not per-request.
-    expected = f"Bearer {_API_KEY}"
+    api_key = get_api_key()
+    if not api_key:
+        return
+    expected = f"Bearer {api_key}"
     provided = request.headers.get("Authorization", "")
     if not secrets.compare_digest(provided, expected):
-        from fastapi import HTTPException
+        raise HTTPException(401, "Unauthorized")
+
+
+def require_key_always(request: Request):
+    """Fail-closed guard for filesystem-mutating routes.
+
+    Unlike require_api_key (loopback-open when USB_API_KEY is unset), this
+    raises 401 whenever the Bearer key is missing or invalid — including
+    when NO key is configured.
+
+    ponytail: mounted explicitly on /api/files/write and /api/files/debug,
+    replacing the old string-prefix tuple in the middleware. The tuple was
+    drift-prone — a newly added mutating route silently missed it; here the
+    guard sits visibly in the handler signature and is enforced by
+    TestAuthMatrix. Add this dependency to any new filesystem-mutating route.
+    """
+    api_key = get_api_key()
+    provided = request.headers.get("Authorization", "")
+    if not api_key:
+        raise HTTPException(401, "Unauthorized")
+    expected = f"Bearer {api_key}"
+    if not secrets.compare_digest(provided, expected):
         raise HTTPException(401, "Unauthorized")
 
 
@@ -122,4 +142,5 @@ __all__ = [
     "get_code_tool", "get_voice_tool", "get_vscode_tool", "get_image_tool",
     "get_diff_tool", "get_export_tool", "get_agent_tool",
     "get_session_store", "get_rate_limiter", "require_api_key",
+    "require_key_always", "get_api_key",
 ]

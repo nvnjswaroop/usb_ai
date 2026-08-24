@@ -66,15 +66,16 @@ async def api_image(request: Request,
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
     # ponytail: 10MB streamed cap — image_tool also enforces post-save, but this kills RAM-OOM at the route.
+    # Single growing bytearray instead of chunk-list + b"".join — halves the
+    # peak allocation (the join used to momentarily hold 2x the cap).
     remaining = 10 * 1024 * 1024
-    chunks = []
+    buf = bytearray()
     while chunk := await file.read(64 * 1024):
         remaining -= len(chunk)
         if remaining < 0:
             raise HTTPException(413, "Image too large (10MB max)")
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    result = image_tool.save_upload(data, file.filename)
+        buf.extend(chunk)
+    result = image_tool.save_upload(buf, file.filename)
     if result["status"] == "ok":
         b64 = image_tool.read_for_llm(result["path"])
         result["base64_url"] = b64.get("base64_url", "")

@@ -142,6 +142,44 @@ def code_blocks(text: str) -> list[dict]:
             for m in re.finditer(r"```(\w+)?\n(.*?)```", text, re.DOTALL)]
 
 
+# ponytail: extracted from llm.LLMEngine so BOTH backends (inline engine and
+# the llama-server sidecar) share one implementation — the two engines must
+# stay behaviorally identical, and copy-pasting this was how drift starts.
+# NOTE the two language tables answer DIFFERENT questions (see llm.py):
+#   CODE_SAVE_LANGS  -> "should this block be auto-saved?"   (gate)
+#   _CODE_LANGS      -> "what file extension does it use?"    (mapping)
+CODE_SAVE_LANGS = {"python", "py", "javascript", "js", "typescript", "ts",
+                   "html", "css", "java", "cpp", "c", "rust", "go",
+                   "bash", "sh", "sql", "json", "yaml", "yml", "xml"}
+
+
+def generate_code_files(text: str, output_dir: Path) -> list[dict]:
+    """Extract code blocks from generated text and save them to output_dir.
+
+    Returns list of dicts: [{"filename", "path", "status",
+                             "opened_in_vscode"}, ...]
+    """
+    from tools.vscode_tool import VSCodeTool
+    vscode = VSCodeTool(output_dir)
+    saved = []
+    for m in re.finditer(r"```(\w+)?\n(.*?)```", text, re.DOTALL):
+        lang = (m.group(1) or "txt").lower()
+        if lang not in CODE_SAVE_LANGS:
+            continue
+        code = m.group(2).strip()
+        if not code:
+            continue
+        fn_match = re.search(r"(?:#|//)\s*filename:\s*(\S+)", code)
+        filename = fn_match.group(1) if fn_match else \
+            f"output_{int(time.time())}.{_CODE_LANGS.get(lang, 'txt')}"
+        result = vscode.save_and_open(code, filename, lang)
+        saved.append({"filename": filename, "lang": lang,
+                      "path": result.get("path", ""),
+                      "status": result.get("status", ""),
+                      "opened_in_vscode": result.get("opened_in_vscode", False)})
+    return saved
+
+
 # Backward-compat aliases (test_security.py exec-extracts _StreamingArtifactExtractor
 # from main.py's source; leaving a stub here lets the legacy source still parse).
 _StreamingArtifactExtractor = StreamingArtifactExtractor

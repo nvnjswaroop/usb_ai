@@ -6,6 +6,19 @@ OCR: pytesseract (if installed) for scanned pages
 import sys
 from pathlib import Path
 
+from logging_config import getLogger
+_log = getLogger("usbai")
+
+# ponytail: pymupdf is imported once at module load when present. If absent,
+# the OCR fallback path uses a local fitz import — avoids the
+# `__import__('fitz').Matrix(...)` inline pattern that violates AGENTS.md.
+try:
+    import fitz as _fitz  # type: ignore
+    _HAVE_MUPDF = True
+except ImportError:
+    _fitz = None
+    _HAVE_MUPDF = False
+
 
 class PDFTool:
     def extract_text(self, path: str) -> dict:
@@ -86,7 +99,12 @@ class PDFTool:
                 "scanned":   scanned_pages,
                 "content":   full_text + note,
             }
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
+            # ponytail: narrow catch — pymupdf raises OSError for I/O,
+            # ValueError for malformed docs, RuntimeError for internal
+            # library failures. Other exceptions should propagate so a
+            # real bug is visible.
+            _log.warning(f"PDF pymupdf failed: {e}")
             return None
 
     def _ocr_page_fitz(self, page, page_num: int) -> str:
@@ -96,16 +114,26 @@ class PDFTool:
             from PIL import Image
             import io
             # Render page to image at 200 DPI
-            mat  = __import__('fitz').Matrix(2, 2)
+            if _fitz is not None:
+                local_fitz = _fitz
+            else:
+                local_fitz = __import__('fitz')
+            mat  = local_fitz.Matrix(2, 2)
             pix  = page.get_pixmap(matrix=mat)
             img  = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             text = pytesseract.image_to_string(img)
             return text.strip()
-        except Exception:
+        except Exception as e:
+            # ponytail: pytesseract raises TesseractNotFoundError / env-specific
+            # errors we can't enumerate; broad is deliberate — but it's logged
+            # per-page now instead of silently returning "" (undiagnosable
+            # empty pages were the old failure mode).
+            _log.warning(f"PDF OCR page {page_num} failed: {type(e).__name__}: {e}")
             return ""
 
     def _try_pypdf(self, p: Path) -> dict | None:
         reader_cls = None
+        # ponytail: try each candidate import name; fall through on absent libs.
         for lib in ["pypdf", "PyPDF2"]:
             try:
                 mod = __import__(lib)

@@ -10,6 +10,13 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# ponytail: global body-size ceiling for JSON requests. FastAPI's default is
+# effectively unlimited — a 1 GB POST to /api/files/write would OOM the worker.
+# 10 MB mirrors the existing per-route upload cap (see files.py / media.py).
+# Streaming uploads use their own 64 KB chunk loop and are NOT subject to this.
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
 class LoadModelRequest(BaseModel):
     model_name: str
     n_ctx: int = 4096
@@ -81,11 +88,6 @@ class SpeakRequest(BaseModel):
 class AgentRequest(BaseModel):
     task: str
     max_steps: int = 8
-
-
-class SearchRequest(BaseModel):
-    query: str
-    max_results: int = 5
 
 
 class DiffRequest(BaseModel):

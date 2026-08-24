@@ -23,6 +23,95 @@ except ImportError:
     _HAVE_PSUTIL = False
 
 
+# ── Windows Job Object (stdlib ctypes) ────────────────────────────────────────
+# ponytail: AGENTS.md said this upgrade needed pywin32 "not in stdlib" —
+# wrong, ctypes IS stdlib. Gives the Windows sandbox what POSIX gets from
+# setrlimit: a hard memory ceiling plus kill-the-whole-tree semantics (child
+# processes die too). Creation/assignment failure is non-fatal: logged, and
+# the watchdog thread + timeout remain as backstops.
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    _JobObjectExtendedLimitInformation = 9
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        # ponytail: layout VERIFIED EMPIRICALLY on x64 (behavioral probe:
+        # over-limit child killed iff LimitFlags written @16 and memory cap
+        # @112). The easy-to-miss field is the SECOND timestamp —
+        # PerJobUserTime — without it every later offset shifts by -8 and
+        # SetInformationJobObject rejects the struct (ERROR_BAD_LENGTH 24).
+        _fields_ = [
+            ("PerProcessUserTime", ctypes.c_longlong),   # off   0
+            ("PerJobUserTime", ctypes.c_longlong),       # off   8
+            ("LimitFlags", wintypes.DWORD),              # off  16
+            ("MinimumWorkingSetSize", ctypes.c_size_t),  # off  24
+            ("MaximumWorkingSetSize", ctypes.c_size_t),  # off  32
+            ("ActiveProcessLimit", ctypes.c_size_t),     # off  40
+            ("Affinity", ctypes.c_size_t),               # off  48
+            ("PriorityClass", wintypes.DWORD),           # off  56
+            ("SchedulingClass", wintypes.DWORD),         # off  60
+        ]                                               # = 64 bytes
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        # BasicLimitInformation (64) then IoInfo (6x8=48) then four SIZE_T.
+        # ProcessMemoryLimit lands at offset 112; total 144 on x64.
+        _fields_ = [("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                    ("IoInfo", _IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    class _WinJob:
+        """Kernel Job Object wrapper.
+
+        memory_bytes=None  -> KILL_ON_JOB_CLOSE only (orphan protection for
+                              child processes like llama-server)
+        memory_bytes=int   -> + hard process-memory ceiling (code sandbox)
+        """
+
+        def __init__(self, memory_bytes: int | None):
+            self._ok = False
+            self._k32 = ctypes.windll.kernel32
+            self._handle = self._k32.CreateJobObjectW(None, None)
+            if not self._handle:
+                raise OSError("CreateJobObjectW failed")
+            limit = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            flags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if memory_bytes is not None:
+                flags |= _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                limit.ProcessMemoryLimit = memory_bytes
+            limit.BasicLimitInformation.LimitFlags = flags
+            if not self._k32.SetInformationJobObject(
+                    self._handle, _JobObjectExtendedLimitInformation,
+                    ctypes.byref(limit), ctypes.sizeof(limit)):
+                raise OSError("SetInformationJobObject failed")
+            self._ok = True
+
+        def assign(self, proc: subprocess.Popen) -> bool:
+            return bool(self._k32.AssignProcessToJobObject(
+                self._handle, int(proc._handle)))
+
+        def terminate(self) -> None:
+            if self._ok:
+                self._k32.TerminateJobObject(self._handle, 1)
+
+        def close(self) -> None:
+            if self._ok:
+                self._k32.CloseHandle(self._handle)
+                self._ok = False
+else:
+    _WinJob = None  # type: ignore[assignment,misc]
+
+
 class CodeTool:
     def __init__(self, python_path: str = None):
         self.python_path = python_path or sys.executable
@@ -143,7 +232,17 @@ class CodeTool:
                 _r.setrlimit(_r.RLIMIT_AS, (self.max_memory_bytes, self.max_memory_bytes))
 
         watchdog = None
+        win_job = None
         try:
+            # ponytail: hard memory ceiling on Windows via Job Object — the
+            # platform equivalent of the POSIX RLIMIT_AS below. Best-effort:
+            # if the ctypes dance fails we log and fall back to watchdog-only.
+            if _WinJob is not None:
+                try:
+                    win_job = _WinJob(self.max_memory_bytes)
+                except OSError as e:
+                    _log.warning(f"CODE-SANDBOX: job object unavailable: {e}")
+                    win_job = None
             proc = subprocess.Popen(
                 [self.python_path, tmp_path],
                 stdout=subprocess.PIPE,
@@ -153,6 +252,9 @@ class CodeTool:
                 env=sandbox_env,
                 preexec_fn=_rlimit if sys.platform != "win32" else None,
             )
+            if win_job is not None and not win_job.assign(proc):
+                _log.warning("CODE-SANDBOX: AssignProcessToJobObject failed "
+                             "(pid may have already exited); watchdog remains")
             # ponytail: Windows watchdog kicks in once the Popen handle exists.
             # No-op on POSIX where rlimit covers memory.
             if sys.platform == "win32" or _HAVE_PSUTIL:
@@ -160,7 +262,12 @@ class CodeTool:
             try:
                 stdout, stderr = proc.communicate(timeout=self.timeout)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                # ponytail: prefer job-tree termination on Windows — kills
+                # grandchildren too, not just the direct child.
+                if win_job is not None:
+                    win_job.terminate()
+                else:
+                    proc.kill()
                 stdout, stderr = proc.communicate()
                 return {
                     "status":  "error",
@@ -193,6 +300,11 @@ class CodeTool:
             if watchdog is not None:
                 watchdog._stop_event.set()  # type: ignore[attr-defined]
                 watchdog.join(timeout=1.0)
+            if win_job is not None:
+                # ponytail: KILL_ON_JOB_CLOSE makes this a no-op for exited
+                # children, and a safety net if the timeout path was skipped.
+                win_job.terminate()
+                win_job.close()
             try:
                 os.unlink(tmp_path)
             except OSError as e:

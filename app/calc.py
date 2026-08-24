@@ -33,7 +33,12 @@ _NAMES = ("pi", "e")
 
 
 def eval_node(node):
-    """Recursively evaluate an AST node with the whitelist above."""
+    """Recursively evaluate an AST node with the whitelist above.
+
+    Raises ValueError on any unwhitelisted construct (Name, Call, Compare,
+    Subscript, Attribute, etc.) so the router can surface it as a 200-error
+    payload rather than a 500.
+    """
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.BinOp):

@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Optional
 
 
+def _backend_label(backend: str) -> str:
+    return ("USB_AI_BACKEND=server (default)" if backend == "server"
+            else "USB_AI_BACKEND=inline — legacy in-process engine")
+
+
 @dataclass
 class Paths:
     """Resolved project directory paths."""
@@ -67,8 +72,17 @@ def build_default(paths: Optional[Paths] = None) -> Container:
 
     Imports are deferred inside the function so importing `container` doesn't
     drag in heavy deps (llama_cpp, whisper, etc.).
+
+    ponytail: LLM backend selectable via USB_AI_BACKEND=server|inline.
+    Phase C: 'server' (llama-server sidecar) is the DEFAULT — it killed the
+    cp311 wheel lockstep and enables concurrent inference. 'inline' remains
+    as a legacy escape hatch requiring llama-cpp-python==0.3.19 on py3.11.
+    Both engines expose the same public surface — see llm_server.ServerEngine
+    docstring for the contract and tests/test_sidecar.py::TestInterfaceParity
+    for the guard.
     """
     # All tool imports are local to keep import cost low.
+    import os as _os
     from llm               import LLMEngine
     from tools.file_tool   import FileTool
     from tools.ppt_tool    import PPTTool
@@ -83,17 +97,42 @@ def build_default(paths: Optional[Paths] = None) -> Container:
 
     paths = paths or build_paths()
 
+    backend = (_os.environ.get("USB_AI_BACKEND", "server").strip().lower()
+               or "server")
+    if backend == "server":
+        from llm_server import ServerEngine
+        llm = ServerEngine(paths.models, paths.root / "prefeeds")
+        _note = f"llama-server sidecar (binary: {llm.manager.binary})"
+    else:
+        llm = LLMEngine(paths.models, paths.root / "prefeeds")
+        _note = "in-process llama-cpp-python"
+    print(f"[BACKEND] {_backend_label(backend)} — {_note}", flush=True)
+
+    # Build tools once, share them: the agent gets the SAME instances the
+    # routers use, so config (e.g. CodeTool.timeout) applies everywhere.
+    file   = FileTool()
+    ppt    = PPTTool(paths.output)
+    pdf    = PDFTool()
+    code   = CodeTool(python_path=sys.executable)
+    voice  = VoiceTool()
+    vscode = VSCodeTool(paths.output)
+    image  = ImageTool(paths.output)
+    diff   = DiffTool()
+    export = ExportTool(paths.output)
+
     return Container(
         paths=paths,
-        llm   =LLMEngine(paths.models, paths.root / "prefeeds"),
-        file  =FileTool(),
-        ppt   =PPTTool(paths.output),
-        pdf   =PDFTool(),
-        code  =CodeTool(python_path=sys.executable),
-        voice =VoiceTool(),
-        vscode=VSCodeTool(paths.output),
-        image =ImageTool(paths.output),
-        diff  =DiffTool(),
-        export=ExportTool(paths.output),
-        agent =AgentTool(paths.output),
+        llm   =llm,
+        file  =file,
+        ppt   =ppt,
+        pdf   =pdf,
+        code  =code,
+        voice =voice,
+        vscode=vscode,
+        image =image,
+        diff  =diff,
+        export=export,
+        agent =AgentTool(paths.output, file_tool=file, code_tool=code,
+                         pdf_tool=pdf, diff_tool=diff, vscode_tool=vscode,
+                         export_tool=export, ppt_tool=ppt, voice_tool=voice),
     )

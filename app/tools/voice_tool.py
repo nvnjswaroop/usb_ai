@@ -7,6 +7,9 @@ STT: OpenAI Whisper (local, offline)
 """
 import os
 import queue
+from logging_config import getLogger
+_log = getLogger("usbai")
+
 import re
 import shutil
 import subprocess
@@ -52,6 +55,12 @@ class _StreamTTS:
         self._tts_lock      = threading.Lock()
         self._current_proc  = None
         self._refill_thread = None
+        # ponytail: fixed 4-worker emission pool — prevents unbounded thread spawn
+        # under TTS burst. Tokens are queued here instead of spawning new threads.
+        self._emit_queue   = queue.Queue()
+        self._workers       = []   # started lazily on first enqueue
+        self._workers_lock  = threading.Lock()
+        self._started      = False
 
     def _refiller(self):
         """Background thread: continuously refills the bucket over time."""
@@ -65,14 +74,14 @@ class _StreamTTS:
                     self._drain_queue()
 
     def _drain_queue(self):
-        """Speak queued tokens while bucket has capacity."""
+        """Speak queued tokens while bucket has capacity — via emit pool."""
         while self.bucket > 0:
             try:
                 token = self._queue.get_nowait()
             except queue.Empty:
                 break
             self.bucket -= 1
-            self._speak_now(token.strip())
+            self._emit_queue.put(token.strip())
 
     def _speak_now(self, token: str):
         """Speak a single token immediately (blocking)."""
@@ -87,30 +96,59 @@ class _StreamTTS:
                 if self._current_proc:
                     self._current_proc.wait()
                     self._current_proc = None
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                # ponytail: per-token speech is best-effort; a dead TTS engine
+                # must not kill the emit worker — but it gets logged now
+                # instead of vanishing.
+                _log.warning(f"TTS-TOKEN: speak failed: {e}")
 
     def start(self):
-        """Start the TTS engine."""
+        """Start the TTS engine and the 4-worker emit pool."""
         self._speaking = True
         self._stop.clear()
         self._refill_thread = threading.Thread(target=self._refiller, daemon=True)
         self._refill_thread.start()
+        # ponytail: 4-worker emit pool — lazily started once.
+        self._ensure_workers()
+
+    def _ensure_workers(self):
+        """Spawn 4 daemon emit workers. Idempotent — only runs once."""
+        with self._workers_lock:
+            if self._started:
+                return
+            self._started = True
+        for _ in range(4):
+            t = threading.Thread(target=self._emit_worker, daemon=True)
+            t.start()
+            self._workers.append(t)
+
+    def _emit_worker(self):
+        """Pull tokens from the emit queue and speak them. Runs until _stop."""
+        while not self._stop.is_set():
+            try:
+                token = self._emit_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if self._stop.is_set():
+                break
+            self._speak_now(token)
+            self._emit_queue.task_done()
 
     def enqueue(self, token: str) -> bool:
         """
         Add a token to be spoken.
-        If bucket has capacity: speak immediately (bucket -= 1)
+        If bucket has capacity: speak immediately via emit pool (bucket -= 1)
         Otherwise: queue it for when bucket refills.
-        Returns True if spoken immediately, False if queued.
+        Returns True if queued for emission, False if queued in refill bucket.
         """
         token = token.strip()
         if not token:
             return True
         with self._refill_lock:
+            self._ensure_workers()
             if self.bucket > 0:
                 self.bucket -= 1
-                threading.Thread(target=self._speak_now, args=(token,), daemon=True).start()
+                self._emit_queue.put(token)
                 return True
             else:
                 self._queue.put(token)
@@ -135,14 +173,20 @@ class _StreamTTS:
             if self._current_proc and self._current_proc.poll() is None:
                 try:
                     self._current_proc.terminate()
-                except Exception:
-                    pass
-        # Clear queue
-        while True:
-            try:
+                except (OSError, subprocess.SubprocessError) as e:
+                    _log.warning(f"TTS-STOP: terminate failed: {e}")
+        # Clear queue without spinning
+        try:
+            while True:
                 self._queue.get_nowait()
-            except queue.Empty:
-                break
+        except queue.Empty:
+            pass
+        # Also clear the emit queue
+        try:
+            while True:
+                self._emit_queue.get_nowait()
+        except queue.Empty:
+            pass
         self.bucket = float(self.bucket_cap)
 
     def wait(self):
@@ -211,6 +255,7 @@ def _speak_windows_raw(text: str, rate: int, voice_id: str) -> subprocess.Popen 
     lines.append("$tts.Dispose()")
 
     script = "\r\n".join(lines)
+    tmp = None
     try:
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".ps1", delete=False,
@@ -224,13 +269,15 @@ def _speak_windows_raw(text: str, rate: int, voice_id: str) -> subprocess.Popen 
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return proc
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        _log.warning(f"TTS-WIN: spawn failed: {e}")
         return None
     finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
 
 def _speak_mac_raw(text: str, rate: int) -> subprocess.Popen | None:
@@ -239,7 +286,8 @@ def _speak_mac_raw(text: str, rate: int) -> subprocess.Popen | None:
         return subprocess.Popen(
             ["say", "-r", str(wpm), text[:3000]],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        _log.warning(f"TTS-MAC: spawn failed: {e}")
         return None
 
 
@@ -251,7 +299,8 @@ def _speak_linux_raw(text: str, rate: int) -> subprocess.Popen | None:
         return subprocess.Popen(
             ["espeak", "-s", str(wpm), "--", text[:3000]],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        _log.warning(f"TTS-LINUX: spawn failed: {e}")
         return None
 
 
@@ -400,7 +449,8 @@ class VoiceTool:
         except subprocess.TimeoutExpired:
             self.stop()
             return {"status": "error", "message": "TTS timed out."}
-        except Exception as e:
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            _log.warning(f"TTS-WIN: speak failed: {e}")
             return {"status": "error", "message": str(e)}
         finally:
             try:
@@ -417,7 +467,8 @@ class VoiceTool:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self._tts_proc.wait(timeout=60)
             return {"status": "ok"}
-        except Exception as e:
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            _log.warning(f"TTS-MAC: speak failed: {e}")
             return {"status": "error", "message": str(e)}
 
     def _speak_linux(self, text: str, rate: int, voice_id: str) -> dict:
@@ -432,7 +483,8 @@ class VoiceTool:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self._tts_proc.wait(timeout=60)
             return {"status": "ok"}
-        except Exception as e:
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            _log.warning(f"TTS-LINUX: speak failed: {e}")
             return {"status": "error", "message": str(e)}
 
     # ── Voice list ─────────────────────────────────────────────────────────────
@@ -473,7 +525,8 @@ class VoiceTool:
                 finally:
                     try: os.unlink(tmp.name)
                     except OSError: pass
-            except Exception as e:
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
+                _log.warning(f"TTS-VOICES: probe failed: {e}")
                 return {"status": "error", "message": str(e)}
         elif sys.platform == "darwin":
             try:
@@ -491,7 +544,8 @@ class VoiceTool:
                             gender = "Male"
                         voices.append({"id": parts[0], "type": gender, "name": line.strip()})
                 return {"status": "ok", "voices": voices}
-            except Exception as e:
+            except (OSError, ValueError, subprocess.SubprocessError) as e:
+                _log.warning(f"TTS-VOICES: say -v failed: {e}")
                 return {"status": "error", "message": str(e)}
         return {"status": "ok", "voices": [{"id": "default", "type": "Unknown", "name": "System Default"}]}
 
@@ -509,7 +563,11 @@ class VoiceTool:
         if not p.exists():
             return {"status": "error", "message": f"Audio not found: {audio_path}"}
 
-        # Load whisper model once (cached on first call)
+        # Load whisper model once (cached on first call).
+        # ponytail: whisper.load_model is ~5s cold-start per process; the
+        # model stays hot in VRAM/RAM for the life of the app. Caching here
+        # (rather than at VoiceTool.__init__) means users without whisper
+        # installed never pay the import cost.
         if not hasattr(self, '_whisper_model'):
             self._whisper_model = whisper.load_model(
                 model_size, download_root=whisper_dir or str(Path.home() / "whisper_models"))
@@ -527,9 +585,13 @@ class VoiceTool:
             result = self._whisper_model.transcribe(work_path, fp16=False)
             text   = result.get("text", "").strip()
             lang   = result.get("language", "unknown")
-            print(f"[STT] ({lang}): {text[:80]}", flush=True)
+            _log.info(f"STT ({lang}): {text[:80]}")
             return {"status": "ok", "text": text, "language": lang}
         except Exception as e:
+            # ponytail: whisper raises torch-internal exception types we can't
+            # enumerate (audio decode, CUDA/CPU backend errors). Broad is
+            # deliberate here — but it's logged, not swallowed.
+            _log.warning(f"STT: transcribe failed: {type(e).__name__}: {e}")
             return {"status": "error", "message": str(e)}
         finally:
             if tmp_wav:
@@ -553,7 +615,27 @@ class VoiceTool:
                     capture_output=True, timeout=30)
                 if r.returncode == 0 and Path(tmp_path).exists():
                     return tmp_path
-            except Exception as e:
-                print(f"[STT] ffmpeg failed: {e}", flush=True)
+            except (OSError, subprocess.SubprocessError) as e:
+                _log.warning(f"STT: ffmpeg failed: {e}")
         Path(tmp_path).unlink(missing_ok=True)
         return None
+
+    # ── Warmup ────────────────────────────────────────────────────────────────
+    def warmup(self, whisper_dir: str = None, model_size: str = "base") -> dict:
+        """Preload the Whisper model so the first /api/voice/transcribe skips
+        the ~5s cold load. Called from main.py when USB_AI_WARMUP_WHISPER=1."""
+        if hasattr(self, '_whisper_model'):
+            return {"status": "ok", "message": "already loaded"}
+        try:
+            import whisper
+        except ImportError:
+            return {"status": "error",
+                    "message": "openai-whisper not installed. Run setup again."}
+        try:
+            self._whisper_model = whisper.load_model(
+                model_size, download_root=whisper_dir or str(Path.home() / "whisper_models"))
+            _log.info(f"WARMUP: Whisper '{model_size}' loaded")
+            return {"status": "ok"}
+        except (OSError, ValueError, RuntimeError) as e:
+            _log.warning(f"WARMUP: whisper load failed: {e}")
+            return {"status": "error", "message": str(e)}

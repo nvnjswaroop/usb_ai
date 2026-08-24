@@ -5,19 +5,17 @@ Implements an act → observe → act loop with self-correction (max 8 steps).
 """
 import json
 import re
-import os
 import sys
 from pathlib import Path
 
 from logging_config import getLogger
 _log = getLogger("usbai")
 
-# Ensure app/ is in path for schemas import
-_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _APP_DIR not in sys.path:
-    sys.path.insert(0, _APP_DIR)
+# ponytail: no sys.path bootstrap here — agent_tool is only ever imported
+# through app.main/container, which own path setup. The old duplicate hack
+# created a second import identity risk for zero benefit.
 
-from schemas import Artifact, AgentResult, ToolCall
+from schemas import Artifact, AgentResult, ToolCall, validate_params, NO_SCHEMA_TOOLS
 from typing import List, Dict, Optional, Any
 
 # Reuse existing tools
@@ -26,7 +24,6 @@ from tools.code_tool   import CodeTool
 from tools.pdf_tool    import PDFTool
 from tools.diff_tool   import DiffTool
 from tools.export_tool import ExportTool
-from tools.image_tool  import ImageTool
 from tools.vscode_tool import VSCodeTool
 from tools.ppt_tool    import PPTTool
 from tools.voice_tool  import VoiceTool
@@ -229,17 +226,22 @@ Start now. Task: {task}
 
 
 class AgentTool:
-    def __init__(self, output_dir=None):
+    def __init__(self, output_dir=None, *, file_tool=None, code_tool=None,
+                 pdf_tool=None, diff_tool=None, vscode_tool=None,
+                 export_tool=None, ppt_tool=None, voice_tool=None):
         self.output_dir = output_dir or _OUT
-        self._file_tool   = FileTool()
-        self._code_tool   = CodeTool(python_path=sys.executable)
-        self._pdf_tool    = PDFTool()
-        self._diff_tool   = DiffTool()
-        self._image_tool  = ImageTool(self.output_dir)
-        self._vscode_tool = VSCodeTool(self.output_dir)
-        self._export_tool = ExportTool(self.output_dir)
-        self._ppt_tool    = PPTTool(self.output_dir)
-        self._voice_tool  = VoiceTool()
+        # ponytail: tools are injected by the DI container (shared instances
+        # with the routers — config like CodeTool.timeout now applies to
+        # agent-driven calls too). Direct construction kept as fallback for
+        # standalone/test use without a container.
+        self._file_tool   = file_tool or FileTool()
+        self._code_tool   = code_tool or CodeTool(python_path=sys.executable)
+        self._pdf_tool    = pdf_tool or PDFTool()
+        self._diff_tool   = diff_tool or DiffTool()
+        self._vscode_tool = vscode_tool or VSCodeTool(self.output_dir)
+        self._export_tool = export_tool or ExportTool(self.output_dir)
+        self._ppt_tool    = ppt_tool or PPTTool(self.output_dir)
+        self._voice_tool  = voice_tool or VoiceTool()
 
     # ── Tool Registry ─────────────────────────────────────────────────────────
     def _get_tool_fn(self, name: str):
@@ -344,8 +346,8 @@ class AgentTool:
         entry["name"]: set(entry["params"]["properties"].keys())
         for entry in TOOL_MANIFEST
     }
-    # Also accept any param for management tools that take no manifest body.
-    _NO_SCHEMA_TOOLS = {"finish", "revise", "retry"}
+    # Management tools that take no manifest body (see schemas.NO_SCHEMA_TOOLS).
+    _NO_SCHEMA_TOOLS = NO_SCHEMA_TOOLS
 
     def _parse_tool_call(self, text: str) -> Optional[ToolCall]:
         """Parse a strict JSON ToolCall from LLM output. Params are validated
@@ -387,15 +389,13 @@ class AgentTool:
         return None
 
     def _validate_params(self, tool_name: str, params: dict) -> bool:
-        """Reject tool calls with undeclared param keys. Returns True to dispatch."""
-        if tool_name in self._NO_SCHEMA_TOOLS:
-            return True
-        if tool_name not in self._ALLOWED_PARAMS:
-            # Unknown tool → dispatcher will return "[ERROR] Unknown tool". Don't hide it.
-            return True
-        if not isinstance(params, dict):
-            return False
-        return set(params.keys()).issubset(self._ALLOWED_PARAMS[tool_name])
+        """Reject tool calls with undeclared param keys. Returns True to dispatch.
+
+        ponytail: delegates to schemas.validate_params — single implementation
+        shared with the test suite (the old test kept a drifting mirror copy).
+        """
+        return validate_params(tool_name, params, self._ALLOWED_PARAMS,
+                               self._NO_SCHEMA_TOOLS)
 
     # ── Execute a single tool ─────────────────────────────────────────────────
     def _execute_action(self, tool_name: str, params: dict) -> tuple[str, List[Artifact]]:
@@ -427,6 +427,11 @@ class AgentTool:
             return f"[ERROR] {tool_name} failed: {e}", []
 
     # ── Main agent loop ────────────────────────────────────────────────────────
+    # ponytail: token-cost cap. Each LLM call (action + revise) is counted via
+    # chars//4 heuristic. At ~256 tokens/call, 8k ≈ 32 iterations before bail —
+    # plenty for normal tasks, stops the LLM burning compute in a revise spiral.
+    TOKEN_CAP = 8000
+
     def execute_task(self, task: str, llm_engine, max_steps: int = 8) -> AgentResult:
         """
         Run an autonomous agent loop to complete the task.
@@ -447,6 +452,13 @@ class AgentTool:
         # iteration when the revised tool also errors, blowing past the implicit
         # "one retry per error" budget and pinning the LLM in a correction spiral.
         step_retries: Dict[int, int] = {}
+        # ponytail: cumulative token estimate (prompt + completion) across all LLM
+        # calls in this run. Heuristic is chars//4 — same as SlidingWindow default.
+        total_tokens_used = 0
+        token_cap_reached = False
+
+        def _estimate_tokens(text: str) -> int:
+            return (len(text or "") + 3) // 4
 
         for step_num in range(max_steps):
             # Build context with observation history (last 6)
@@ -460,7 +472,28 @@ class AgentTool:
                 + AGENT_PROMPT_TEMPLATE.format(manifest=manifest_json, task=task)
             )
 
+            # ponytail: token-cost gate. If we've already blown the budget on
+            # earlier iterations, bail with a clear status rather than starting
+            # another round-trip.
+            if total_tokens_used >= self.TOKEN_CAP:
+                token_cap_reached = True
+                _log.warning(f"agent token cap reached ({total_tokens_used}/{self.TOKEN_CAP}) at step {step_num}")
+                return AgentResult(
+                    status="ok",
+                    result=f"Agent stopped: token-cost cap reached ({total_tokens_used} tokens spent). "
+                           f"Last observation: {observations[-1] if observations else '(none)'}",
+                    artifacts=all_artifacts,
+                    steps=steps,
+                    total_steps=step_num,
+                    total_tokens_used=total_tokens_used,
+                    token_cap_reached=True,
+                )
+
             try:
+                # ponytail: count prompt tokens before sending so the estimate
+                # includes the input even if the call fails mid-stream.
+                total_tokens_used += _estimate_tokens(prompt)
+                total_tokens_used += _estimate_tokens(system_prompt)
                 response = "".join(list(llm_engine.stream_tokens(
                     messages=[],
                     user_message=prompt,
@@ -468,12 +501,15 @@ class AgentTool:
                     temperature=0.3,
                     max_tokens=512,
                 )))
+                total_tokens_used += _estimate_tokens(response)
             except Exception as e:
                 return AgentResult(
                     status="error",
                     result=f"LLM generation failed: {e}",
                     steps=steps,
                     total_steps=step_num,
+                    total_tokens_used=total_tokens_used,
+                    token_cap_reached=token_cap_reached,
                 )
 
             tool_call = self._parse_tool_call(response)
@@ -503,6 +539,8 @@ class AgentTool:
                     artifacts=all_artifacts,
                     steps=steps,
                     total_steps=step_num+1,
+                    total_tokens_used=total_tokens_used,
+                    token_cap_reached=token_cap_reached,
                 )
 
             # ── retry ────────────────────────────────────────────────────────
@@ -599,9 +637,15 @@ class AgentTool:
                             "success": "ERROR" not in obs2[:50],
                             "artifacts": [a.model_dump() for a in arts2],
                         })
-                except Exception:
+                except (RuntimeError, ValueError, OSError) as e:
                     _log.warning(f"revise failed for step {step_num}: {e}")
-                    # Keep original error, continue loop
+                except Exception as e:
+                    # ponytail: log-and-continue — revise is best-effort self-correction;
+                    # a handler crash here used to raise NameError (`{e}` with no `as e`)
+                    # and 500 the whole /api/agent/execute request.
+                    _log.warning(f"revise failed for step {step_num}: "
+                                 f"unexpected {type(e).__name__}: {e}")
+                # Keep original error, continue loop
                 # ponytail: bump after we've attempted the revise (success or fail).
                 # Acts as the per-step cap and prevents recursive retries.
                 step_retries[step_num] = step_retries.get(step_num, 0) + 1
@@ -614,4 +658,6 @@ class AgentTool:
             artifacts=all_artifacts,
             steps=steps,
             total_steps=max_steps,
+            total_tokens_used=total_tokens_used,
+            token_cap_reached=token_cap_reached,
         )

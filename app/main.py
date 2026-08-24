@@ -15,12 +15,14 @@ if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
 import asyncio
+import ipaddress
 import json
 import re
 import secrets
 import threading
 import time
 import traceback
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -32,9 +34,11 @@ from schemas import Artifact, AgentResult
 import base64
 from rate_limit import RateLimiter
 from container import build_default as _build_default
-from logging_config import setup_logging
+from dependencies import get_api_key
+from logging_config import setup_logging, getLogger
 
 setup_logging()
+_log = getLogger("usbai")
 
 # ── Paths (legacy module-level aliases — kept so tests using
 # `import main; main.HISTORY_DIR` keep working until Group 7 fixes them.) ──
@@ -49,7 +53,41 @@ for _d in (MODELS_DIR, HISTORY_DIR, OUTPUT_DIR, WHISPER_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── App + container ──────────────────────────────────────────────────────────
-app = FastAPI(title="USB AI")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown hooks — run under ANY launcher (python main.py,
+    uvicorn main:app, launch.bat), unlike the __main__ block below.
+
+    ponytail: the bind-address fail-closed gate can't live here (uvicorn's
+    CLI --host never reaches the app), so the authoritative LAN protection is
+    the runtime client-IP guard in check_auth below. This lifespan adds the
+    operator-visible banner + a clean index flush on shutdown.
+    """
+    key = get_api_key()
+    if key:
+        import hashlib
+        _log.info(f"[AUTH] API key active (sha256: {hashlib.sha256(key.encode()).hexdigest()[:8]})")
+    else:
+        _log.warning("[AUTH] USB_API_KEY unset — /api/* open on loopback only; "
+                     "non-loopback clients are rejected at runtime")
+    yield
+    store = getattr(_app.state, "session_store", None)
+    if store is not None:
+        try:
+            store.flush_index()
+        except Exception as e:  # noqa: BLE001 — shutdown must never raise
+            _log.warning(f"SHUTDOWN: index flush failed: {e}")
+    llm = getattr(_app.state.container, "llm", None)
+    if llm is not None and hasattr(llm, "shutdown"):
+        # ponytail: server backend owns a child process — always stop it.
+        try:
+            llm.shutdown()
+        except Exception as e:  # noqa: BLE001
+            _log.warning(f"SHUTDOWN: llama-server stop failed: {e}")
+
+
+app = FastAPI(title="USB AI", lifespan=lifespan)
 _container = _build_default()
 app.state.container     = _container
 app.state.session_store = None  # set in lifespan below, OR by tests
@@ -61,6 +99,15 @@ app.state.load_lock     = threading.Lock()
 from sessions import SessionStore  # noqa: E402
 _DEFAULT_STORE = SessionStore.default(HISTORY_DIR)
 app.state.session_store = _DEFAULT_STORE
+
+# ponytail: optional Whisper preload — USB_AI_WARMUP_WHISPER=1 loads the model
+# in a background thread at boot so the first /api/voice/transcribe skips the
+# ~5s cold start. Off by default (not everyone uses voice).
+if os.environ.get("USB_AI_WARMUP_WHISPER", "").lower() in ("1", "true", "yes", "on"):
+    threading.Thread(
+        target=_container.voice.warmup,
+        kwargs={"whisper_dir": str(_container.paths.whisper)},
+        daemon=True, name="whisper-warmup").start()
 
 # CORS — restrict credentials + allowed headers
 # ponytail: narrow to Content-Type + Authorization — X-Requested-With isn't
@@ -76,36 +123,54 @@ app.add_middleware(CORSMiddleware,
     max_age=600)
 
 # ── Auth middleware ─────────────────────────────────────────────────────────────
-_RAW = os.environ.get("USB_API_KEY", "").strip()
-_API_KEY = _RAW or None
-
-# ponytail: filesystem-mutating routes must NEVER be reachable without a key,
-# even if other /api/* routes are open. The middleware short-circuits on missing
-# keys for these prefixes before the generic "no key = open" branch, so LAN
-# exposure without USB_API_KEY cannot reach them. /api/health and
-# /api/models/progress are explicit allow-lists below — health probes and
-# progress polling must work for monitoring and for the UI's loading spinner,
-# even when USB_API_KEY is configured.
-_SENSITIVE_PATH_PREFIXES = ("/api/files/write", "/api/files/debug")
+# ponytail: this middleware is the SINGLE generic bearer gate. Route-specific
+# hardening lives in declarative dependencies — require_key_always() on
+# filesystem-mutating routes (/api/files/write|debug) fail-closes them even
+# when USB_API_KEY is unset. /api/health is the explicit allow-list below —
+# health probes must work for monitoring regardless of key config.
 _AUTH_BYPASS_PATHS = ("/api/health",)
+
+
+def _client_is_loopback(host: Optional[str]) -> bool:
+    """True when the client IP is loopback (or unparseable — non-IP
+    transports like unix sockets / test clients carry no routable address).
+
+    ponytail: authoritative LAN guard. The __main__ bind gate can be bypassed
+    by `uvicorn main:app --host 0.0.0.0` because the CLI host never reaches
+    the app — but a remote CLIENT's IP is always visible at request time, so
+    this check cannot be bypassed by any launcher.
+    """
+    if not host:
+        return True
+    h = host.lower()
+    if h.startswith("::ffff:"):  # IPv4-mapped IPv6
+        h = h[7:]
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return True
+
 
 @app.middleware("http")
 async def check_auth(request: Request, call_next):
-    if request.url.path.startswith("/api/") and not _API_KEY:
-        # ponytail: fail-closed on sensitive paths even when other endpoints are open.
-        if any(request.url.path.startswith(p) for p in _SENSITIVE_PATH_PREFIXES):
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        return await call_next(request)
+    api_key = get_api_key()
     if request.url.path.startswith("/api/"):
         # ponytail: constant-time compare defeats timing leaks on localhost; swap for HMAC if shared.
-        # ponytail: health probes bypass auth — orchestrators + the UI's loading spinner
-        # both need /api/health to respond 200 regardless of key config.
+        # ponytail: health probes bypass auth AND the LAN guard — remote
+        # orchestrators must be able to probe liveness without a key.
         if any(request.url.path == p for p in _AUTH_BYPASS_PATHS):
             return await call_next(request)
-        provided = request.headers.get("Authorization", "")
-        expected = f"Bearer {_API_KEY}" if _API_KEY else ""
-        if _API_KEY and not secrets.compare_digest(provided, expected):
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        # ponytail: runtime fail-closed LAN gate (see _client_is_loopback).
+        client_host = request.client.host if request.client else None
+        if not api_key and not _client_is_loopback(client_host):
+            return JSONResponse(
+                {"detail": "LAN access requires USB_API_KEY — set it or bind to 127.0.0.1"},
+                status_code=403)
+        if api_key:
+            provided = request.headers.get("Authorization", "")
+            expected = f"Bearer {api_key}"
+            if not secrets.compare_digest(provided, expected):
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
 # ── Pydantic moved to app/request_models.py (Group 3) ───────────────────────
@@ -114,7 +179,7 @@ async def check_auth(request: Request, call_next):
 from request_models import (  # noqa: F401
     LoadModelRequest, ChatRequest, FileReadRequest, FileWriteRequest,
     DebugFileRequest, PDFRequest, CodeRequest, SaveCodeRequest, PPTRequest,
-    RenameRequest, SpeakRequest, AgentRequest, SearchRequest, DiffRequest,
+    RenameRequest, SpeakRequest, AgentRequest, DiffRequest,
     ExportRequest, CalcRequest,
 )
 from request_models import MAX_BODY_SIZE  # noqa: E402
@@ -138,40 +203,15 @@ async def check_body_size(request: Request, call_next):
             return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
     return await call_next(request)
 
-# ── Personalities live in app/sessions.py (Group 3) ──────────────────────────
-from sessions import PERSONALITIES  # noqa: F401
-
-# ── Legacy session helpers (Group 3) ─────────────────────────────────────
-# Back-compat shims for test_security.py which still mutates main.HISTORY_DIR
-# and calls main._save directly. Group 7 will move test imports properly;
-# until then these aliases let Group 3 land without editing tests/.
-def _session_index_path():
-    """Index path follows HISTORY_DIR — recomputed each call so tests that
-    swap main.HISTORY_DIR mid-test see the right filesystem location.
-    """
-    return HISTORY_DIR / "_index.json"
-
-def _sp(sid): return HISTORY_DIR / f"{sid}.json"
-def _load(sid):
-    p = _sp(sid)
-    if not p.exists():
-        return {"id":sid,"title":"New Chat","messages":[],
-                "created":time.time(),"updated":time.time()}
-    return json.loads(p.read_text(encoding="utf-8"))
-
-def _save(data):
-    """Legacy save shim — delegates to SessionStore owned by app.state.
-
-    Tests overwrite HISTORY_DIR before calling _save; we mirror that into
-    the SessionStore so both legacy and modern paths see the same on-disk data.
-    """
-    if HISTORY_DIR != app.state.session_store.history_dir:
-        app.state.session_store = SessionStore.default(HISTORY_DIR)
-    app.state.session_store.save(data)
-
-def _sys(mode="chat"): return PERSONALITIES.get(mode, PERSONALITIES["chat"])
-
-# Back-compat attribute removed — TestSessionIndex now uses SessionStore directly.
+# ── Global exception handler ───────────────────────────────────────────────
+# ponytail: unhandled exceptions previously surfaced Starlette's plain 500
+# (or raw str(e) where handlers re-raised). Uniform envelope + server-side
+# traceback; the client never sees internals.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    _log.error(f"UNHANDLED {type(exc).__name__} on {request.url.path}: "
+               f"{exc}\n{traceback.format_exc()}")
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 # ── Router registration ──────────────────────────────────────────────────────
 from routers import system, sessions as sessions_router, chat, files, media, \
@@ -205,16 +245,24 @@ if __name__ == "__main__":
     # ponytail: localhost bind by default; USB_AI_HOST=0.0.0.0 opts into LAN exposure.
     _host = os.environ.get("USB_AI_HOST", "127.0.0.1").strip() or "127.0.0.1"
     _IS_LOCAL_HOST = _host.lower() in ("127.0.0.1", "::1", "localhost")
-    if _API_KEY:
+    _key = get_api_key()
+    if _key:
         import hashlib
-        print(f"[AUTH] API key set (sha256: {hashlib.sha256(_API_KEY.encode()).hexdigest()[:8]})")
+        print(f"[AUTH] API key set (sha256: {hashlib.sha256(_key.encode()).hexdigest()[:8]})")
     else:
         print(f"[AUTH] No USB_API_KEY set — endpoints are open (bound to {_host})")
+        # ponytail: env-gated exec routes are their own auth when no key exists.
+        # On loopback that's an explicit operator opt-in; warn so it's visible.
+        from routers.agent import is_agent_enabled
+        if is_code_run_enabled() or is_agent_enabled():
+            print("[WARN] USB_AI_AGENT_CODE / USB_AI_AGENT is enabled WITHOUT "
+                  "USB_API_KEY — code execution and agent endpoints are open "
+                  "to anything that can reach this host.", flush=True)
     # ponytail: fail-closed startup. LAN exposure (any non-local host) without USB_API_KEY
     # would leave every /api/* route open to the network. Refuse to boot and tell the
     # operator exactly how to fix it: set USB_API_KEY (recommended for any LAN exposure)
     # OR bind to a loopback host by exporting USB_AI_HOST=127.0.0.1.
-    if not _API_KEY and not _IS_LOCAL_HOST:
+    if not _key and not _IS_LOCAL_HOST:
         print(
             "[FATAL] USB_API_KEY is not set but USB_AI_HOST={!r} is not a loopback address.\n"
             "        LAN exposure requires an API key — refusing to start with the API open.\n"

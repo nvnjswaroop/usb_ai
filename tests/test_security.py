@@ -23,30 +23,18 @@ class TestAgentParse(TestCase):
                                         "def _parse_tool_call(text:", 1)
         # Strip stray `self.` from helper calls once `self` is gone from the signature
         method_src = method_src.replace("self._validate_params(", "_validate_params(")
-        from schemas import ToolCall
+        from schemas import ToolCall, validate_params
+        # ponytail: use the REAL validator from schemas — the old hand-mirrored
+        # _Validator class could silently drift from production semantics.
         ns = {"json": __import__("json"),
               "Optional": __import__("typing").Optional,
               "ToolCall": ToolCall,
               "_ALLOWED_PARAMS": allowed or {},
               "_NO_SCHEMA_TOOLS": {"finish", "revise", "retry"},
-              "_validate_params": self._Validator(allowed or {}),
+              "_validate_params": lambda t, p, _a=(allowed or {}): validate_params(t, p, _a),
              }
         exec(method_src, ns)
         return ns["_parse_tool_call"]
-
-    class _Validator:
-        """Mirror production: management tools pass; known tools must subset allowlist."""
-        def __init__(self, allowed):
-            self.allowed = allowed
-        def __call__(self, tool, params):
-            no_schema = {"finish", "revise", "retry"}
-            if tool in no_schema:
-                return True
-            if tool not in self.allowed:
-                return True  # unknown tool → handled by dispatcher
-            if not isinstance(params, dict):
-                return False
-            return set(params.keys()).issubset(self.allowed[tool])
 
     def test_valid(self):
         fn = self._fn({"finish": {"result", "thought", "params"}})
@@ -97,19 +85,10 @@ class TestPathTraversalClosed(TestCase):
 
 
 class TestStreamingExtractor(TestCase):
-    """_StreamingArtifactExtractor emits artifacts as code blocks close."""
+    """StreamingArtifactExtractor emits artifacts as code blocks close."""
     def _cls(self):
-        main_path = Path(__file__).resolve().parent.parent / "app" / "main.py"
-        src = main_path.read_text(encoding="utf-8")
-        start = src.index("class _StreamingArtifactExtractor")
-        end   = src.index("def _code_blocks", start)
-        cls_src = src[start:end]
-        from schemas import Artifact
-        ns = {"__name__": "_anon", "re": __import__("re"),
-              "Artifact": Artifact, "time": __import__("time"),
-              "_CODE_LANGS": {"python": "py", "py": "py", "js": "js", "txt": "txt"}}
-        exec(cls_src, ns)
-        return ns["_StreamingArtifactExtractor"]
+        from artifacts import StreamingArtifactExtractor
+        return StreamingArtifactExtractor
 
     def test_single_block(self):
         cl = self._cls()
@@ -145,28 +124,243 @@ class TestSchemasDefaultFactories(TestCase):
 
 
 class TestAuthConstantTime(TestCase):
-    """check_auth uses secrets.compare_digest (no plaintext ==)."""
+    """check_auth compares keys via secrets.compare_digest (never plaintext ==).
+
+    ponytail: asserts on whole-file source, not a fixed char-window — the old
+    800-char window rotted when middleware comments grew and went red.
+    """
     def test_source_uses_compare_digest(self):
         src = (Path(__file__).resolve().parent.parent / "app" / "main.py").read_text(encoding="utf-8")
-        auth_block = src[src.index("@app.middleware"):src.index("@app.middleware") + 800]
-        self.assertIn("compare_digest", auth_block)
-        self.assertNotIn('"Authorization\") != \"Bearer', auth_block)
+        self.assertIn("compare_digest", src)
+        # No naive equality against the header value / expected key anywhere.
+        self.assertNotRegex(src, r'(provided|expected)\s*==\s*["\']')
+        self.assertNotRegex(src, r'==\s*(provided|expected)\b')
+
+
+class TestAuthMiddleware(TestCase):
+    """Test auth middleware with TestClient — missing/wrong/correct key.
+
+    ponytail: patch os.environ, not module globals — dependencies.get_api_key()
+    and main's middleware both read the env var per-call (single source of truth).
+    """
+    def test_missing_key_allowed_when_none_set(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        try:
+            client = TestClient(_m.app)
+            resp = client.get("/api/status")
+            self.assertEqual(resp.status_code, 200)
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+    def test_wrong_key_returns_401(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        os.environ["USB_API_KEY"] = "secret-key"
+        try:
+            client = TestClient(_m.app)
+            resp = client.get("/api/status", headers={"Authorization": "Bearer wrong-key"})
+            self.assertEqual(resp.status_code, 401)
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+    def test_correct_key_succeeds(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        os.environ["USB_API_KEY"] = "secret-key"
+        try:
+            client = TestClient(_m.app)
+            resp = client.get("/api/status", headers={"Authorization": "Bearer secret-key"})
+            self.assertEqual(resp.status_code, 200)
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+
+class TestFilesWriteTraversal(TestCase):
+    """Path traversal against /api/files/write — expect 403."""
+    def test_dotdot_in_write_path_denied(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        client = TestClient(_m.app)
+        resp = client.post("/api/files/write",
+                            json={"path": "../escape.txt", "content": "malicious"})
+        self.assertIn(resp.status_code, (401, 403, 400))
+
+
+class TestOutputRoutesRequireAuth(TestCase):
+    """Regression: /api/files/upload, /api/preview, /api/outputs and friends
+    must require auth when USB_API_KEY is set.
+
+    Phase D closed five unprotected output routes that previously leaked
+    session-generated artifacts to anyone on the host.
+    """
+    def test_routes_reject_without_key(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        os.environ["USB_API_KEY"] = "secret-key"
+        try:
+            _m.app.state.rate_limiter.reset()
+            client = TestClient(_m.app)
+            # No Bearer token → 401.
+            for method, path in [("get",  "/api/outputs"),
+                                  ("get",  "/api/outputs/download/anything.txt"),
+                                  ("get",  "/api/preview/anything.html"),
+                                  ("post", "/api/files/upload"),
+                                  ("post", "/api/calc"),
+                                  ("post", "/api/chat/stream"),
+                                  ("post", "/api/files/read")]:
+                resp = client.request(method, path,
+                                       json={"path": "x", "content": "x",
+                                             "expression": "1+1",
+                                             "session_id": "x", "message": "x"})
+                self.assertEqual(resp.status_code, 401,
+                    f"{method.upper()} {path} should 401 without key, got {resp.status_code}")
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+
+class TestExportEscapes(TestCase):
+    """export_html escapes BOTH message content AND the session title.
+
+    The title is user-controllable (first chat message / RenameRequest) and is
+    interpolated into <title> + <h1> — an unescaped <script> there was a real
+    stored-XSS sink in the exported file.
+    """
+    def test_title_and_content_escaped(self):
+        from tools.export_tool import ExportTool
+        evil = "<script>alert('xss')</script>"
+        with tempfile.TemporaryDirectory() as d:
+            tool = ExportTool(Path(d))
+            r = tool.export_html({"id": "x", "title": evil, "created": 0,
+                                  "messages": [{"role": "user", "content": evil}]})
+            self.assertEqual(r["status"], "ok")
+            out = Path(r["path"]).read_text(encoding="utf-8")
+        self.assertNotIn("<script>", out)
+        self.assertIn("&lt;script&gt;", out)
+
+    def test_markdown_export_writes_file(self):
+        from tools.export_tool import ExportTool
+        with tempfile.TemporaryDirectory() as d:
+            tool = ExportTool(Path(d))
+            r = tool.export_markdown({"id": "y", "title": "T & Co", "created": 0,
+                                      "messages": [{"role": "assistant",
+                                                    "content": "hi <b>there</b>"}]})
+            self.assertEqual(r["status"], "ok")
+            self.assertTrue(Path(r["path"]).exists())
+
+
+class TestAuthMatrix(TestCase):
+    """Every always-mounted /api/* route enforces the SAME policy — the
+    middleware and require_api_key cannot drift again:
+
+      - key unset -> route reachable past auth (200 business-ok or 422
+        validation; never 401/503). Intentional exception: /api/files/write
+        and /api/files/debug fail-closed via _SENSITIVE_PATH_PREFIXES.
+      - key set   -> no bearer header = exactly 401 on every route.
+    """
+
+    # Routes chosen to be side-effect-free on empty bodies: {} triggers FastAPI
+    # 422 validation before any handler logic runs.
+    SAFE_ROUTES = [
+        ("get",    "/api/status"),
+        ("get",    "/api/models"),
+        ("get",    "/api/models/progress"),
+        ("get",    "/api/outputs"),
+        ("get",    "/api/files/browse"),
+        ("get",    "/api/sessions/nonexistent-sid"),
+        ("delete", "/api/sessions/nonexistent-sid"),
+        ("post",   "/api/sessions/new"),
+        ("post",   "/api/chat/stream"),
+        ("post",   "/api/files/read"),
+        ("post",   "/api/diff/files"),
+        ("post",   "/api/pdf/extract"),
+        ("post",   "/api/ppt/generate"),
+        ("post",   "/api/calc"),
+        ("post",   "/api/export"),
+        ("post",   "/api/code/save"),
+        ("post",   "/api/v1/chat/completions"),
+        ("get",    "/api/v1/models"),
+    ]
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        _m.app.state.rate_limiter.reset()
+        return TestClient(_m.app)
+
+    def test_unset_key_reachable_everywhere(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        try:
+            c = self._client()
+            for method, path in self.SAFE_ROUTES:
+                r = c.request(method, path, json={})
+                self.assertNotEqual(r.status_code, 401, f"{method.upper()} {path}")
+                self.assertNotEqual(r.status_code, 503,
+                                    f"{method.upper()} {path} -> {r.status_code} "
+                                    f"(dual-auth regression: dep must not 503 when key unset)")
+                self.assertNotEqual(r.status_code, 429, f"{method.upper()} {path}")
+            # Documented exception: filesystem-mutating prefixes stay fail-closed.
+            for path in ("/api/files/write", "/api/files/debug"):
+                r = c.post(path, json={})
+                self.assertEqual(r.status_code, 401, f"POST {path} should stay fail-closed")
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+    def test_set_key_requires_bearer_on_every_route(self):
+        from fastapi.testclient import TestClient
+        import main as _m
+        old = os.environ.pop("USB_API_KEY", None)
+        os.environ["USB_API_KEY"] = "matrix-key"
+        try:
+            c = self._client()
+            for method, path in self.SAFE_ROUTES + [
+                    ("post", "/api/files/write"), ("post", "/api/files/debug")]:
+                r = c.request(method, path, json={})
+                self.assertEqual(r.status_code, 401,
+                                 f"{method.upper()} {path} -> {r.status_code} "
+                                 f"(expected 401 without bearer)")
+        finally:
+            if old is not None:
+                os.environ["USB_API_KEY"] = old
+
+    def test_gated_routes_mount_policy_matches_env(self):
+        import main as _m
+        from routers.code import is_code_run_enabled
+        from routers.agent import is_agent_enabled
+        mounted = {getattr(r, "path", "") for r in _m.app.routes}
+        self.assertEqual("/api/code/run" in mounted, is_code_run_enabled())
+        self.assertEqual("/api/agent/execute" in mounted, is_agent_enabled())
 
 
 class TestSessionIndex(TestCase):
-    """_save writes the index; api_sessions returns sorted index records."""
+    """SessionStore.save() writes the index; list_index() returns sorted index records."""
     def test_index_round_trip(self):
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
-        with tempfile.TemporaryDirectory() as h, tempfile.TemporaryDirectory() as g:
-            import main
-            main.HISTORY_DIR = Path(h)
-            from schemas import Artifact
-            # First save should bootstrap the index.
-            main._save({"id": "a", "title": "A", "messages": [{"role":"user","content":"hi"}]})
-            main._save({"id": "b", "title": "B", "messages": []})
-            idx_path = main._SESSION_INDEX
+        from sessions import SessionStore  # noqa: F401
+        with tempfile.TemporaryDirectory() as h:
+            store = SessionStore.default(Path(h))
+            store.save({"id": "a", "title": "A", "messages": [{"role":"user","content":"hi"}]})
+            store.save({"id": "b", "title": "B", "messages": []})
+            idx_path = store.index_path
             self.assertTrue(idx_path.exists())
             items = json.loads(idx_path.read_text(encoding="utf-8"))
             self.assertEqual({i["id"] for i in items}, {"a", "b"})
             # most-recently-updated first by the sort key
             self.assertEqual(items[0]["title"], "B")
+
+
+if __name__ == "__main__":
+    # ponytail: runner was missing — `python tests/test_security.py` used to
+    # define all classes, run zero tests, and exit 0. AGENTS.md documents this
+    # command as the way to run the suite.
+    main(verbosity=2)

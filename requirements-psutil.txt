@@ -1,0 +1,5 @@
+# Optional: accurate RAM watchdog for the code-execution sandbox (Windows).
+# code_tool.py falls back to a tasklist polling probe without it — install
+# only if you use /api/code/run or agent mode and want tighter memory caps:
+#   pip install -r requirements-psutil.txt
+psutil>=5.9,<8.0

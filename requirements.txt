@@ -1,12 +1,25 @@
 # USB AI — consolidated dependencies
 # Pinned versions ensure reproducible installs across platforms.
 #
+# Installed by scripts/install.py, which parses @feature:... markers below:
+#   core            = lines outside any feature block   (always installed)
+#   @feature:voice                    = Whisper STT (+ torch installed separately
+#                                       by the installer from the CPU wheel index)
+#   @feature:ocr                      = scanned-PDF OCR
+#
+# The LLM runtime is NO LONGER a pip package: scripts/fetch_llama.py downloads
+# the official prebuilt llama-server binary (sha256-pinned in llama_server.lock).
+# The old llama-cpp-python inline backend was removed in Phase C.
+#
+# The file stays plain-pip-installable: markers are comments.
+#
 # --- Core runtime ---
 fastapi>=0.104,<1.0
 uvicorn[standard]>=0.24,<1.0
 pydantic>=2.0,<3.0
 python-multipart>=0.0.6
 numpy>=1.20,<2.0  # upper bound: numpy 2.x broke python-pptx
+httpx>=0.27,<2.0  # starlette TestClient — required by the test suite
 
 # PDF (pymupdf is the primary reader; pypdf was removed — pymupdf covers all paths)
 pymupdf>=1.23,<2.0
@@ -17,14 +30,7 @@ pillow>=10.0,<12.0
 # Office (used by tools/ppt_tool.py for PowerPoint export)
 python-pptx>=0.6,<1.0
 
-# LLM inference
-llama-cpp-python==0.3.19
-
 # Speech-to-text (used by tools/voice_tool.py for voice transcription)
+# @feature:voice:start
 openai-whisper>=20231117,<2025.0
-
-# torch is NOT listed here — it is CPU-only and must be installed separately
-# to avoid pulling in a CUDA-enabled wheel that would fail on systems without GPUs:
-# pip install torch --index-url https://download.pytorch.org/whl/cpu
-# Pin to a known-good version when upgrading:
-# torch>=2.0,<3.0
+# @feature:voice:end

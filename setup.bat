@@ -14,6 +14,9 @@ REM    is fragile across Windows installs -- do NOT rely on chcp 65001 sticking
 REM    through nested invocations. PowerShell blocks use $env:TEMP for the
 REM    same reason -- %TEMP% in cmd strings gets eaten by MSYS bash shells.
 setlocal EnableDelayedExpansion
+REM    ponytail: forward any installer flags straight through, e.g.
+REM      setup.bat --yes --cpu --voice
+set "SETUP_ARGS=%*"
 
 cd /d "%~dp0"
 set "USB=%~dp0"
@@ -120,55 +123,19 @@ if errorlevel 1 (
 )
 echo       pip ready.
 
-REM -- 6/7 Install deps from requirements.txt (and OCR flag) ---------------
-echo [6/7] Installing requirements.txt + (optional) OCR + torch (CPU)...
-"%PY%" -m pip install -r "%USB%requirements.txt" --no-warn-script-location
+REM -- 6/7 Hardware-driven dependency install -------------------------------
+REM    ponytail: all package decisions live in scripts/install.py now --
+REM    hardware detection, feature toggles (voice/ocr), verify + summary.
+REM    The .bat keeps only what MUST be batch: acquiring Python itself.
+echo [6/7] Running dependency installer...
+"%PY%" "%USB%scripts\install.py" %SETUP_ARGS%
 if errorlevel 1 (
-    echo [ERROR] requirements.txt install failed. See pip output above.
+    echo [ERROR] Installer failed. See output above.
     pause
     exit /b 1
 )
-REM    ponytail: torch is best-effort -- voice features may degrade but core
-REM    chat/LLM still works. CPU-only index keeps the wheel off the GPU one.
-"%PY%" -m pip install torch --index-url https://download.pytorch.org/whl/cpu --no-warn-script-location 2>nul
-if errorlevel 1 (
-    echo       torch CPU index failed, falling back to PyPI default...
-    "%PY%" -m pip install torch --no-warn-script-location 2>nul
-    if errorlevel 1 (
-        echo [WARNING] torch unavailable. Voice input may not work.
-    )
-)
-REM    OCR is optional -- only if requirements-ocr.txt exists and user opted in.
-if exist "%USB%requirements-ocr.txt" (
-    echo       Installing optional OCR (requirements-ocr.txt)...
-    "%PY%" -m pip install -r "%USB%requirements-ocr.txt" --no-warn-script-location 2>nul
-    if errorlevel 1 (
-        echo [WARNING] OCR deps unavailable. PDF OCR disabled.
-    )
-)
-echo       Requirements installed.
 
-REM -- 7/7 Smoke test + project folders ------------------------------------
-echo [7/7] Smoke test + folders...
-for %%d in (models history output prefeeds whisper_models) do (
-    if not exist "%USB%%%d" mkdir "%USB%%%d"
-)
-if not exist "%USB%prefeeds\system_prompt.txt" (
-    > "%USB%prefeeds\system_prompt.txt" echo You are a helpful AI assistant on a USB drive. Completely private. Be concise and honest.
-)
-
-REM    ponytail: prove the app imports, not just that packages installed.
-REM    Catches ABI mismatches, broken _pth config, and bad site-packages
-REM    layout -- all silent failures a "successful" pip doesn't surface
-REM    until launch.
-"%PY%" -c "import fastapi, pydantic, pymupdf, pptx, PIL, numpy; from app import main; assert main.app, 'app not loaded'; print('  fastapi:', fastapi.__version__); print('  pydantic:', pydantic.VERSION); print('  pymupdf:', pymupdf.__version__); print('  app.main: OK')" 2>nul
-if errorlevel 1 (
-    echo [WARNING] Smoke test failed. The app may not start cleanly.
-    echo           Try running launch.bat to see the actual error.
-) else (
-    echo       Smoke test passed.
-)
-
+REM -- 7/7 Done --------------------------------------------------------------
 echo.
 echo ============================================================
 echo  Setup complete!

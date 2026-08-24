@@ -5,7 +5,21 @@ in transitive deps (python-pptx, whisper, etc.).
 """
 from __future__ import annotations
 
+import asyncio
 import re
+from functools import partial
+
+
+async def run_sync(fn, *args, **kwargs):
+    """Offload a blocking call to the default executor.
+
+    ponytail: the stdlib answer to sync filesystem I/O inside async handlers
+    (aiofiles was deliberately removed from deps — see SECURITY.md). Await
+    this around store.load/save, read_text and directory scans so the event
+    loop keeps serving while disk I/O runs on a worker thread.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
 
 
 def safe_filename(name: str) -> str:

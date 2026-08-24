@@ -16,12 +16,12 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from dependencies   import (
     get_diff_tool, get_file_tool, get_llm, get_paths, get_vscode_tool,
-    get_rate_limiter, require_api_key,
+    get_rate_limiter, require_api_key, require_key_always,
 )
 from request_models import (
     DiffRequest, DebugFileRequest, FileReadRequest, FileWriteRequest,
 )
-from util import safe_filename as _safe_filename  # dedup: shared with media/ppt
+from util import safe_filename as _safe_filename, run_sync  # dedup: shared with media/ppt
 
 
 router = APIRouter()
@@ -52,14 +52,15 @@ async def api_read(req: FileReadRequest, request: Request,
 @router.post("/api/files/write")
 async def api_write(req: FileWriteRequest, request: Request,
                     file_tool=Depends(get_file_tool),
-                    limiter=Depends(get_rate_limiter)):
-    # ponytail: write-only auth lives in the middleware fail-closed gate
-    # (_SENSITIVE_PATH_PREFIXES); the limiter here defends against bursty
-    # local callers hitting the same endpoint.
+                    limiter=Depends(get_rate_limiter),
+                    _guard=Depends(require_key_always)):
+    # ponytail: require_key_always fail-closes this route even when USB_API_KEY
+    # is unset (loopback-open policy exception). The guard is declarative — it
+    # travels with the handler instead of a drift-prone middleware prefix list.
     ip = request.client.host if request.client else "unknown"
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
-    return file_tool.write_file(req.path, req.content)
+    return await run_sync(file_tool.write_file, req.path, req.content)
 
 
 @router.get("/api/files/browse")
@@ -97,13 +98,23 @@ async def api_upload(request: Request, paths=Depends(get_paths),
     dest = paths.output / safe_name
     # ponytail: stream to disk, not RAM — avoids OOM on large uploads
     remaining = upload_max
-    with open(dest, "wb") as f:
-        while chunk := await file.read(64 * 1024):
-            remaining -= len(chunk)
-            if remaining < 0:
+    completed = False
+    try:
+        with open(dest, "wb") as f:
+            while chunk := await file.read(64 * 1024):
+                remaining -= len(chunk)
+                if remaining < 0:
+                    raise HTTPException(413, "File too large (10MB max)")
+                f.write(chunk)
+        completed = True
+    finally:
+        # ponytail: symmetric partial-file cleanup — the size-cap path used to
+        # unlink, but a mid-write OSError left orphaned partial files behind.
+        if not completed:
+            try:
                 dest.unlink(missing_ok=True)
-                raise HTTPException(413, "File too large (10MB max)")
-            f.write(chunk)
+            except OSError:
+                pass
     return {"status": "ok", "filename": safe_name, "path": str(dest)}
 
 
@@ -112,13 +123,15 @@ async def api_debug(req: DebugFileRequest, request: Request,
                     llm=Depends(get_llm),
                     file_tool=Depends(get_file_tool),
                     vscode_tool=Depends(get_vscode_tool),
-                    limiter=Depends(get_rate_limiter)):
+                    limiter=Depends(get_rate_limiter),
+                    _guard=Depends(require_key_always)):
+    # ponytail: require_key_always — same fail-closed contract as /api/files/write.
     ip = request.client.host if request.client else "unknown"
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
     if not llm.is_loaded():
         raise HTTPException(400, "No model")
-    r = file_tool.read_file(req.path)
+    r = await run_sync(file_tool.read_file, req.path)
     if r.get("status") == "error":
         raise HTTPException(400, r["message"])
     original = r["content"]
@@ -149,7 +162,8 @@ async def api_preview(filename: str, request: Request, paths=Depends(get_paths),
     fp = paths.output / _safe_filename(filename)
     if not fp.exists():
         raise HTTPException(404, "Not found")
-    return HTMLResponse(fp.read_text(encoding="utf-8"))
+    # ponytail: read_text off the event loop — large previews stalled the loop.
+    return HTMLResponse(await run_sync(fp.read_text, encoding="utf-8"))
 
 
 @router.get("/api/outputs")
@@ -159,11 +173,16 @@ async def api_outputs(request: Request, paths=Depends(get_paths),
     ip = request.client.host if request.client else "unknown"
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
-    files = []
-    for f in sorted(paths.output.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_file():
-            files.append({"name": f.name, "size_kb": round(f.stat().st_size / 1024, 1)})
-    return {"files": files}
+
+    def _scan():
+        # ponytail: stat() per entry ran on the event loop — a big output dir
+        # blocked all other requests. Runs on a worker thread via run_sync.
+        return [{"name": f.name, "size_kb": round(f.stat().st_size / 1024, 1)}
+                for f in sorted(paths.output.iterdir(),
+                                key=lambda x: x.stat().st_mtime, reverse=True)
+                if f.is_file()]
+
+    return {"files": await run_sync(_scan)}
 
 
 @router.get("/api/outputs/download/{filename}")

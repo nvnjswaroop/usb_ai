@@ -1,0 +1,10 @@
+{
+  "build": "b10605",
+  "note": "Pinned llama.cpp release for bin/llama/. Bump via scripts/fetch_llama.py --list then --write-lock.",
+  "assets": {
+    "cpu": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10605/llama-b10605-bin-win-cpu-x64.zip",
+      "sha256": "bf1f5f6c7b0c274be3b8676fd52da84d26377c2d8ba9032da254176411f45b29"
+    }
+  }
+}

@@ -33,20 +33,48 @@
   chunks with a hard 10MB cap. Over-cap → `HTTPException(413)` and the partial
   file is `unlink()`ed. No upload reads into RAM.
 
-### Auth — `app/main.py:check_auth`
+### Auth — `app/main.py:check_auth` + `app/dependencies.py`
 
-- Opt-in via `USB_API_KEY` env var. Empty/missing → endpoints open (designed
-  for localhost).
+- Opt-in via `USB_API_KEY` env var. Empty/missing → `/api/*` open on loopback
+  by design (`launch.bat` never sets a key; README Quick Start expects the UI
+  to work immediately). Both the middleware and `require_api_key` read the key
+  via `dependencies.get_api_key()` per-call — one source of truth, no cached
+  module globals that can drift apart.
+- Filesystem-mutating routes (`/api/files/write`, `/api/files/debug`) mount
+  `require_key_always` — they fail-closed 401 even when no key is configured.
+  New mutating routes must add this dependency (enforced by
+  `TestAuthMatrix`).
 - When set, comparison uses `secrets.compare_digest` (constant-time, no timing
-  leak).
+  leak). Every `/api/*` route returns exactly 401 without a Bearer token.
 - Startup prints SHA-256[:8] of the key for identification, never the key.
 - CORS pinned to `http://localhost:8080/127.0.0.1:8080/3000` — not wildcard.
+- Rate limiting: process-wide per-IP sliding window, 30 req/min, wired into
+  every data endpoint; idle buckets evicted every 5 min.
 
-### Bind default
+### LLM sidecar (`app/llm_server.py`)
+
+- The default backend spawns the official prebuilt `llama-server` binary
+  (sha256-pinned in `llama_server.lock`; nothing is ever compiled).
+- Child binds **127.0.0.1 on an ephemeral port** — never exposed beyond
+  loopback regardless of `USB_AI_HOST`.
+- Orphan protection: on Windows the child joins a KILL_ON_JOB_CLOSE Job
+  Object, so even a hard parent crash/taskkill reaps it (no zombie holding
+  RAM + port). POSIX relies on lifespan/atexit stop paths.
+- Binary placement is explicit: `bin/llama/`, `USB_AI_LLAMA_DIR`, or
+  `USB_AI_LLAMA_SERVER` — an override that misses is an error, not a silent
+  fallback to another location.
+
+### Bind default + runtime LAN guard
 
 - uvicorn binds `127.0.0.1` by default. Opt into LAN with `USB_AI_HOST=0.0.0.0`.
   (Was hard-coded `0.0.0.0` before, closed inadvertently for a shared-network
   user.)
+- The `__main__` bind gate is convenience, not the boundary — launching via
+  `uvicorn main:app --host 0.0.0.0` skips it. The AUTHORITATIVE guard is in
+  the auth middleware: any non-loopback client IP without a valid
+  `USB_API_KEY` gets 403 on every `/api/*` route (health excepted). This
+  cannot be bypassed by launcher choice — the client's address is always
+  visible at request time.
 
 ### Streaming chat
 
@@ -57,19 +85,21 @@
 
 ## Documented-as-not (real holes, named explicitly)
 
-### `code_tool.run_python` — sandbox is minimal
+### `code_tool.run_python` — layered sandbox
 
-Per `code_tool.py:23-38`: temp cwd + stripped env + (3-line)`resource` rlimit
-on Linux only. Not seccomp, not firejail. Tied to:
+Per `code_tool.py`: temp cwd + stripped env, plus platform memory/CPU caps:
 
-- **Linux:** 2s CPU and 512MB RAM via `resource.setrlimit`. Stops fork-bombs
-  and large-alloc, not arbitrary system calls.
-- **Windows:** no rlimit (Windows lacks preexec_fn). A malicious code string
-  on Windows can call `subprocess`, read `HOMEPATH`, write anywhere.
+- **Linux/macOS:** `resource.setrlimit` — 2s CPU and 512MB RAM.
+- **Windows:** ctypes **Job Object** (stdlib, no pywin32) — 512MB process
+  memory ceiling + KILL_ON_JOB_CLOSE, so timeout kills the whole process
+  tree. Assigned per-run; job-creation failure is logged and the RAM
+  watchdog thread + 30s timeout remain as backstops.
 
-Upgrade path: `pywin32` + `psutil.Process().suspend()`; or shell out to
-PowerShell's `Start-Process -Job` with memory limits. Or block the endpoint
-behind `USB_AI_AGENT_CODE=1` opt-in.
+Still out: syscall filtering (seccomp/AppContainer) — a malicious code
+string can still touch whatever the user account can touch. Upgrade path is
+a real container story, not more ctypes. Endpoint stays behind the
+`USB_AI_AGENT_CODE=1` opt-in gate + rate limiter + (when configured)
+Bearer auth.
 
 ### `vscode_tool.fix_file_in_place` only enforces `_resolve` since the recent
 harden — any prior caller bypassing `_resolve` is a backdoor. The current
@@ -90,12 +120,38 @@ download once via `download_whisper.bat`. Voice never leaves the host.
 
 - HTTPS / TLS. Run on localhost; expose behind a reverse proxy for LAN.
   (`Caddy`/`nginx` with self-signed is the minimal move.)
-- Rate limiting. Single-user localhost app — the larger point of this tool
-  is "no SaaS, your data, your machine." Add when crossing to multi-user.
-- `aiofiles` is in `requirements.txt` but unused — pending removal. Doesn't
-  affect security.
+- `aiofiles` was removed from `requirements.txt` (Group 2 / Week 2 of the 5/5
+  roadmap). Was always unused — FastAPI's `UploadFile` / `file.read(...)` covers
+  the only async upload paths. The vendored Python under `python/win/` still
+  has the wheel on disk but nothing imports it.
 
 ## Reporting
 
 This is an offline tool. If you find a security issue, fix it locally. The
 README has the architecture diagram.
+
+## OpenAI-compatible bridge (`/api/v1/*`)
+
+Two endpoints (`POST /api/v1/chat/completions`, `GET /api/v1/models`) mirror
+the OpenAI Chat Completions API shape so external clients (CyberMatrix and
+any other OpenAI-shaped consumer) can drive the local model without code
+changes.
+
+**Inherited from `/api/chat/stream`**:
+
+- `USB_API_KEY` opt-in: open on loopback when unset, fail-closed on LAN via
+  the same `secrets.compare_digest` check the middleware uses for the rest
+  of `/api/*`.
+- Per-IP rate-limit: same 30/min budget as `/api/chat/stream`, same
+  process-wide `RateLimiter` instance.
+- No new attack surface: token counts use the internal `_count` the
+  sliding-window already uses; model discovery reuses `paths.models.glob`
+  the existing `/api/models` route uses. No new dependencies.
+
+**Not yet implemented**: `stream: true` returns 400. The SSE path lives on
+`/api/chat/stream` in USB AI's own format; bridging to OpenAI chunk format
+is a deferred add when a client needs streaming.
+
+This is an **adapter**, not a separate LLM gateway — there is one
+`LLMEngine` instance, one sliding window, one auth context, regardless of
+which endpoint the request arrives on.

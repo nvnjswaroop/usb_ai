@@ -46,6 +46,15 @@ class SessionStore:
     index_path:  Path
     _index_cache: Optional[list] = None
     _search_cache: Optional[dict] = None  # path -> (mtime, size, dict)
+    # ponytail: index debounce state. The index is now cache-AUTHORITATIVE:
+    # save() mutates the in-memory list and flushes to disk at most once per
+    # INDEX_FLUSH_SECONDS (new-session saves and deletes flush immediately —
+    # they're rare). Crash window loses ≤2s of index freshness, which is safe
+    # because the index is advisory: list_index() falls back to a glob rebuild.
+    _index_dirty: bool = False
+    _last_flush: float = 0.0
+
+    INDEX_FLUSH_SECONDS: float = 2.0
 
     def __post_init__(self):
         if self._search_cache is None:
@@ -75,30 +84,50 @@ class SessionStore:
         data["updated"] = time.time()
         p = self._path(data["id"])
         p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        # ponytail: write index eagerly; replaces the per-call glob+json.dumps disk
-        # storm in api_sessions. Cost: one extra write per save, gain: O(1) reads.
-        try:
-            idx = json.loads(self.index_path.read_text(encoding="utf-8")) if self.index_path.exists() else []
-        except (OSError, ValueError):
-            idx = []
-        rec = next((i for i in idx if i["id"] == data["id"]),
+        # ponytail: cache-authoritative index with debounced disk flush. The
+        # old code re-read + rewrote the whole index JSON on EVERY save — O(n)
+        # disk RMW per chat message. Now: mutate memory, flush at most once
+        # per INDEX_FLUSH_SECONDS (immediately for brand-new sessions, which
+        # are rare; message-append saves — the hot path — debounce).
+        idx = self._index_cache
+        if idx is None:
+            try:
+                idx = json.loads(self.index_path.read_text(encoding="utf-8")) if self.index_path.exists() else []
+            except (OSError, ValueError):
+                idx = []
+        had_id = any(i.get("id") == data["id"] for i in idx)
+        rec = next((i for i in idx if i.get("id") == data["id"]),
                    {"id": data["id"]})
         rec.update({"id": data["id"], "title": data.get("title", "Chat"),
                     "updated": data["updated"],
                     "message_count": len(data.get("messages", []))})
-        idx = [i for i in idx if i["id"] != data["id"]]
+        idx = [i for i in idx if i.get("id") != data["id"]]
         idx.append(rec)
         idx.sort(key=lambda x: (x.get("updated", 0), x["id"]), reverse=True)
-        try:
-            self.index_path.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
-        except OSError:
-            pass  # ponytail: index is advisory; list_sessions falls back to glob.
-        # ponytail: cache invalidated on every save — list_index will rebuild on next call.
-        self._index_cache = None
+        self._index_cache = idx
+        self._index_dirty = True
+        now = time.monotonic()
+        if (not had_id) or (now - self._last_flush) >= self.INDEX_FLUSH_SECONDS:
+            self.flush_index()
+
+    def flush_index(self) -> None:
+        """Write the in-memory index to disk when dirty. Safe to call often."""
+        if self._index_dirty and self._index_cache is not None:
+            try:
+                self.index_path.write_text(
+                    json.dumps(self._index_cache, ensure_ascii=False),
+                    encoding="utf-8")
+            except OSError:
+                pass  # ponytail: index is advisory; list_sessions falls back to glob.
+        self._index_dirty = False
+        self._last_flush = time.monotonic()
 
     def list_index(self, limit: int = 100, rebuild_if_empty: bool = True) -> list:
-        # ponytail: in-memory cache — valid until next save() invalidates it.
-        # Single-process server; no stale reads because save() clears cache on write.
+        # ponytail: in-memory cache is authoritative; push any debounced
+        # pending index state to disk before serving so external readers of
+        # _index.json never see stale content.
+        if self._index_dirty:
+            self.flush_index()
         if self._index_cache is not None:
             return self._index_cache[:limit]
         out: list = []
@@ -122,14 +151,22 @@ class SessionStore:
 
     def delete(self, sid: str) -> bool:
         p = self._path(sid)
-        if p.exists():
+        existed = p.exists()
+        if existed:
             p.unlink()
-            # Invalidate cache — deleted session must not appear in list or search.
+        if self._index_cache is not None:
+            # Cache-authoritative: prune in place and flush immediately
+            # (deletes are rare; a stale index entry must not survive).
+            self._index_cache = [i for i in self._index_cache
+                                 if i.get("id") != sid]
+            self._index_dirty = True
+            self.flush_index()
+        else:
+            # ponytail: cache never built — old invalidate-on-delete semantics.
             self._index_cache = None
-            # Prune from search cache if present.
-            self._search_cache.pop(str(p), None)
-            return True
-        return False
+        # Prune from search cache if present.
+        self._search_cache.pop(str(p), None)
+        return existed
 
     def search_text(self, query: str) -> list:
         """Search session history, caching parsed session dicts by (mtime, size).
