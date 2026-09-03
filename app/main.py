@@ -254,6 +254,7 @@ if __name__ == "__main__":
         # ponytail: env-gated exec routes are their own auth when no key exists.
         # On loopback that's an explicit operator opt-in; warn so it's visible.
         from routers.agent import is_agent_enabled
+        from routers.code import is_code_run_enabled
         if is_code_run_enabled() or is_agent_enabled():
             print("[WARN] USB_AI_AGENT_CODE / USB_AI_AGENT is enabled WITHOUT "
                   "USB_API_KEY — code execution and agent endpoints are open "

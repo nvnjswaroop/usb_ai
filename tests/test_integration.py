@@ -157,6 +157,22 @@ class TestUploadCap(IntegrationBase):
 
 
 class TestPdfExtract(IntegrationBase):
+    def setUp(self):
+        super().setUp()
+        # extract_text now routes through file_tool._resolve — the temp dir
+        # must be allowlisted for the happy-path test (the denial test below
+        # deliberately uses a path OUTSIDE any allowed base).
+        from tools.file_tool import ALLOWED_BASE_DIRS
+        ALLOWED_BASE_DIRS.append(Path(self._tmp.name))
+
+    def tearDown(self):
+        from tools.file_tool import ALLOWED_BASE_DIRS
+        try:
+            ALLOWED_BASE_DIRS.remove(Path(self._tmp.name))
+        except ValueError:
+            pass
+        super().tearDown()
+
     def test_pdf_roundtrip(self):
         try:
             import fitz  # pymupdf
@@ -176,6 +192,20 @@ class TestPdfExtract(IntegrationBase):
         body = r.json()
         self.assertEqual(body["status"], "ok")
         self.assertIn("USB_AI_INTEGRATION_MARKER_12345", body["content"])
+
+    def test_pdf_outside_allowlist_denied(self):
+        """Regression (audit 2026-09-03): extract_text used to bypass
+        _resolve and read ANY absolute .pdf path on disk."""
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        outside = Path(self._tmp.name).parent / "usbai_outside_allowlist.pdf"
+        outside.write_bytes(b"%PDF-1.4 fake")  # content irrelevant — path is the attack
+        try:
+            r = client.post("/api/pdf/extract", json={"path": str(outside)})
+        finally:
+            outside.unlink(missing_ok=True)
+        self.assertEqual(r.status_code, 200)  # app returns 200 + status payload
+        self.assertEqual(r.json()["status"], "error")
 
 
 class TestLanGuardRawAsgi(IntegrationBase):

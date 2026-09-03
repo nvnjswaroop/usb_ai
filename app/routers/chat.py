@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -16,6 +17,8 @@ from dependencies       import get_llm, get_paths, get_rate_limiter, get_session
 from request_models     import ChatRequest
 from sessions           import PERSONALITIES, SessionStore, system_for_mode
 from util               import run_sync
+from logging_config     import getLogger
+_log = getLogger("usbai")
 
 
 router = APIRouter()
@@ -116,7 +119,11 @@ async def api_chat(req: ChatRequest, request: Request,
 
             yield f"data: {json.dumps({'done': True, 'saved_files': saved})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            # ponytail: detail to the log, generic to the wire — str(e) used
+            # to leak engine internals/filesystem paths into chat history.
+            _log.error(f"CHAT-STREAM failed on session {req.session_id}: "
+                       f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            yield f"data: {json.dumps({'error': 'Stream failed — see server logs'})}\n\n"
         finally:
             # ponytail: don't persist an empty/failed assistant turn — pollutes history.
             # save offloaded to a worker thread — JSON-dumping long histories

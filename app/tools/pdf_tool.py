@@ -22,15 +22,13 @@ except ImportError:
 
 class PDFTool:
     def extract_text(self, path: str) -> dict:
-        p = Path(path.strip())
-
-        # Resolve relative paths to absolute (Documents / Desktop only)
-        if not p.is_absolute():
-            for base in [Path.home() / "Documents", Path.home() / "Desktop"]:
-                c = base / p
-                if c.exists():
-                    p = c
-                    break
+        # Route through file_tool._resolve — the single FS chokepoint. The old
+        # raw Path() join read ANY absolute .pdf on disk (audit 2026-09-03).
+        try:
+            from tools.file_tool import _resolve
+            p = _resolve(path)
+        except (OSError, ValueError) as e:
+            return {"status": "error", "message": f"Access denied: {e}"}
 
         if not p.exists():
             return {"status": "error",

@@ -28,3 +28,6 @@ python_install*.log
 
 # Claude Code local settings — machine-specific by design, never commit
 .claude/settings.local.json
+
+# Agent-tooling scratch caches (never part of the app)
+.utim_tmp/

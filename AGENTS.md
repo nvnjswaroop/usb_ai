@@ -103,3 +103,49 @@ with the app dir on `sys.path`. This is a decision, not an accident:
   `main` vs `app.main` double-import splitting singletons like RateLimiter).
 - Migrate to package-relative only when a second entrypoint or external
   importer appears — until then it's churn with regression risk.
+
+## Session memory (for future agents / future me)
+
+Maintained so a new session can pick up context without re-auditing.
+Update this when big things change; keep it short.
+
+### Who / environment
+- Owner: JYOTHI (repo on GitHub as `nvnjswaroop/usb_ai`). Windows 11,
+  CPU-only machine; no NVIDIA tooling. Another project at
+  `C:\Users\JYOTHI\pro\cybermatrix` (pentest tool that uses usb_ai as its
+  LLM provider via /api/v1/*).
+- Local Pythons: embeddable `python/win/python.exe` (3.11, lacks `venv`
+  module — pip-audit can't run inside it) + system Python 3.11 at
+  `%LOCALAPPDATA%\Programs\Python\Python311` (use that for pip-audit).
+- Test suite: `python -m unittest discover -s tests -p "test_*.py"` —
+  133 tests, all green as of Phase C.
+
+### Repo state (after Phase D–G + CI fixes)
+- LLM runtime = `llm_server.py` sidecar (official prebuilt llama-server,
+  sha256-pinned in `llama_server.lock`, committed under `bin/llama/`).
+  `USB_AI_BACKEND=inline` keeps the old llama-cpp-python legacy path.
+- Installer: `scripts/install.py` parses `@feature:` blocks in
+  requirements.txt; `fetch_llama.py` downloads/verifies the binary.
+- Auth: single source of truth = `dependencies.get_api_key()`; runtime LAN
+  guard 403s non-loopback clients when USB_API_KEY is unset;
+  `require_key_always` guards files/write|debug.
+- Sandbox: Job Object (512MB) on Windows via ctypes — layout empirically
+  pinned (144-byte ext struct; flags@16, mem@112).
+- Uploads stream with 10MB caps; chat SSE batches queue drains; session
+  index is cache-authoritative with 2s debounced flush.
+
+### Hard-won gotchas (don't relearn)
+- `# comment` after a .gitignore pattern kills the pattern — one line, both.
+- pip-audit 2.10 removed `--fail-level` and positional-vs-`-r` parsing is
+  quirky; CI uses bare `pip-audit -r requirements.txt`.
+- openai-whisper must NOT get a `<year.0` upper bound (date versioning).
+- Thinking models (Qwen3 etc.) need `chat_template_kwargs.enable_thinking:
+  false`, else small max_tokens budgets return empty strings.
+- Job Object struct layout is x64-critical (PerJobUserTime exists) — see
+  code_tool.py ponytail comments before touching.
+
+### Currently open / next candidates
+1. Human browser smoke of the new backend (load Qwen3.5, chat, vision warn).
+2. Score is ~4.7/5 at ceiling (audit 2026-08 via repo review). Remaining
+   ceiling-raisers are architectural (package imports, real sandboxing) —
+   deliberately deferred.

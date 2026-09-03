@@ -10,7 +10,7 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 
 | Feature | Description |
 |---|---|
-| **Local LLMs** | GGUF models (Qwen, Llama, Gemma, Mistral, Phi, DeepSeek) via llama-cpp-python |
+| **Local LLMs** | GGUF models (Qwen, Llama, Gemma, Mistral, Phi, DeepSeek) via the bundled llama-server sidecar |
 | **Vision** | Image analysis with Gemma 4, LLaVA, Moondream, Qwen2-VL, MiniCPM-V |
 | **Sliding Window** | Intelligent context management â€” oldest messages dropped when context fills up |
 | **File Browser** | Read, write, and browse any file anywhere on your system |
@@ -192,7 +192,7 @@ No compilers involved â€” it's a sha256-verified download of ggml's own rel
 Run `launch.bat` again â€” it will kill any existing process on port 8080 first.
 
 **Model fails to load with KV cache error:**
-This means your model was built for a different context size than requested. The app now auto-detects the model's context size from the GGUF header and caps it automatically. If the error persists, try a different model file or reinstall `llama-cpp-python` via `update_llama.bat`.
+This means your model was built for a different context size than requested. The app now auto-detects the model's context size from the GGUF header and caps it automatically. If the error persists, try a different model file or re-run `update_llama.bat` to refresh the llama-server binary.
 
 **No voice from TTS on Windows:**
 Make sure a TTS voice is installed in Windows Settings â†’ Accessibility â†’ Speech â†’ Add voices.
@@ -329,7 +329,7 @@ Auth: inherits `/api/chat/stream` policy exactly â€” `USB_API_KEY` opt-in (
 
 | Dependency | License | Obligation |
 |---|---|---|
-| Most deps (fastapi, uvicorn, pydantic, llama-cpp-python, python-pptx, pillow, whisperâ€¦) | MIT / Apache-2.0 / BSD | None for normal use |
+| Most deps (fastapi, uvicorn, pydantic, python-pptx, pillow, whisperâ€¦) | MIT / Apache-2.0 / BSD | None for normal use |
 | **PyMuPDF** (`pymupdf`) | **AGPL-3.0** | If you distribute this app to others as a product (or serve it commercially without releasing source), PyMuPDF requires your source be AGPL too â€” or a commercial pymupdf license from Artifex. Personal/local use is unaffected. Alternative: swap `tools/pdf_tool.py` to `pypdf` (BSD) if you need permissive-only distribution. |
 
 ## Code Style: the # ponytail: Convention

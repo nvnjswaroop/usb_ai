@@ -118,6 +118,7 @@ class SidecarManager:
             argv += ["--mmproj", str(mmproj)]
         logf = open(self.log_path, "w", encoding="utf-8", errors="replace")
         self.proc = subprocess.Popen(argv, stdout=logf, stderr=subprocess.STDOUT)
+        self._logf = logf  # ponytail: kept for close() in stop() — OS handle leak (audit 2026-09-03)
         self.port = port
         self.model_name = model_name
         self._assign_kill_on_close()
@@ -186,6 +187,13 @@ class SidecarManager:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=5)
+        logf = getattr(self, "_logf", None)
+        if logf is not None:
+            try:
+                logf.close()
+            except OSError:
+                pass
+            self._logf = None
         job = getattr(self, "_job", None)
         if job is not None:
             job.close()

@@ -60,7 +60,7 @@ class StreamingArtifactExtractor:
         self._open_lang = None   # language of currently open block
         self._open_start = -1
         self._complete: list[Artifact] = []
-        # ponytail: cursor to avoid O(n²) re-scans. only search past this point.
+        # ponytail: cursor to avoid O(n^2) re-scans. only search past this point.
         self._scan_pos = 0
 
     def push(self, chunk: str):

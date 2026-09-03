@@ -1,4 +1,4 @@
-﻿"""System router â€” root HTML, status, models, model load + progress.
+﻿"""System router — root HTML, status, models, model load + progress.
 
 Model load is a singleton mutation (one engine, one lock). The route itself
 lives here but pulls the load_lock + engine straight from app.state via a
@@ -25,7 +25,7 @@ _log = getLogger("usbai")
 
 router = APIRouter()
 
-# ponytail: per-process uptime anchor â€” set lazily on first /api/health call so it tracks process lifetime.
+# ponytail: per-process uptime anchor — set lazily on first /api/health call so it tracks process lifetime.
 _health_started_at: float | None = None
 
 
@@ -47,11 +47,17 @@ async def root(paths=Depends(get_paths)):
 @router.get("/api/status")
 async def api_status(request: Request, paths=Depends(get_paths),
                      llm=Depends(get_llm),
+                     limiter=Depends(get_rate_limiter),
                      _auth=Depends(require_api_key)):
-    # ponytail: gated behind require_api_key per audit 2026-08-07 â€” previously
+    # ponytail: limiter added 2026-09-03 — status was the only authed route
+    # without one (spammable model/dir globbing per audit).
+    ip = request.client.host if request.client else "unknown"
+    if not limiter.check(ip):
+        raise HTTPException(429, "Rate limit exceeded; try again shortly.")
+    # ponytail: gated behind require_api_key per audit 2026-08-07 — previously
     # leaked current_model + *.gguf filenames + personality names with zero
     # auth. When USB_API_KEY is unset on loopback this still returns 200
-    # (intentional â€” status needs to be readable by the local UI).
+    # (intentional — status needs to be readable by the local UI).
     return {
         "model_loaded":   llm.is_loaded(),
         "model_loading":  llm.is_loading(),
@@ -146,7 +152,7 @@ async def api_load(req: LoadModelRequest, request: Request,
     ip = request.client.host if request.client else "unknown"
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
-    # ponytail: check-and-set under a lock â€” kills the two-POST race that double-inits Llama.
+    # ponytail: check-and-set under a lock — kills the two-POST race that double-inits Llama.
     if not lock.acquire(blocking=False):
         raise HTTPException(409, "Already loading.")
     llm.set_loading(True)

@@ -15,7 +15,10 @@ SAFE_TEXT_EXTENSIONS = {
     ".c", ".cpp", ".h", ".hpp",
     ".java", ".rs", ".go", ".swift", ".kt", ".dart",
     # Data/config
-    ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env",
+    ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    # ponytail: .env REMOVED 2026-09-03 (audit) — reading .env files inside
+    # allowed dirs printed API keys/secrets into chat history. Editing .env
+    # via the agent was never worth the leak; users edit it manually.
     ".sql", ".graphql", ".prisma",
     # Docs
     ".md", ".txt", ".csv", ".log", ".conf", ".config",
@@ -32,7 +35,7 @@ SAFE_WRITE_EXTENSIONS = {
     ".py", ".ts", ".css",
     ".c", ".cpp", ".h", ".hpp",
     ".java", ".rs", ".go", ".swift", ".kt", ".dart",
-    ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env",
+    ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".sql", ".graphql", ".prisma",
     ".md", ".txt", ".csv", ".log", ".conf", ".config",
     ".gitignore", ".dockerfile", ".makefile", ".make",
