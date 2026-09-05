@@ -220,6 +220,14 @@ from routers import system, sessions as sessions_router, chat, files, media, \
 from routers.agent import is_agent_enabled
 
 app.include_router(system.router)
+
+# ponytail: vendored UI libs (marked/highlight/DOMPurify) — chat.html loads
+# them with relative URLs, so they must serve from /vendor. Static, public
+# (same trust level as the HTML itself); check_auth only guards /api/*.
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+_vendor_dir = Path(__file__).parent / "ui" / "vendor"
+if _vendor_dir.is_dir():
+    app.mount("/vendor", StaticFiles(directory=str(_vendor_dir)), name="vendor")
 app.include_router(sessions_router.router, tags=["sessions"])
 app.include_router(chat.router,        tags=["chat"])
 app.include_router(files.router,       tags=["files"])

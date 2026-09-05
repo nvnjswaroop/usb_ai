@@ -3,10 +3,15 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>USB AI</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'">
+<!-- ponytail: unsafe-inline is a tradeoff — the whole UI is one inline script.
+     The CSP's job here is blocking EXTERNAL origins (MITM'd CDN / injected
+     <script src=...>); model output is sanitized separately by DOMPurify.
+     Move the JS to a file + hash-based CSP when the UI is next touched. -->
+<link rel="stylesheet" href="vendor/github-dark.min.css">
+<script src="vendor/highlight.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -977,10 +982,10 @@ function appendArtifactCard(art, streaming){
       const isPy=lang==='python'||lang==='py';
       const isHtml=lang==='html';
       const isSave=['python','py','javascript','js','typescript','ts','html','css','java','cpp','c','rust','go','bash','sh','sql'].includes(lang);
-      let btns=`<button class="code-btn" onclick="copyCode('${id}')">Copy</button>`;
-      if(isPy) btns+=`<button class="code-btn run-btn" onclick="runInline('${id}')">Run</button>`;
-      if(isSave) btns+=`<button class="code-btn vs" onclick="saveInline('${id}','${lang}')">Save</button>`;
-      if(isHtml) btns+=`<button class="code-btn" onclick="previewHtml('${id}')">Preview</button>`;
+      let btns=`<button class="code-btn" data-act="copy" data-id="${id}">Copy</button>`;
+            if(isPy) btns+=`<button class="code-btn run-btn" data-act="run" data-id="${id}">Run</button>`;
+            if(isSave) btns+=`<button class="code-btn vs" data-act="save" data-id="${id}" data-lang="${esc(lang)}">Save</button>`;
+            if(isHtml) btns+=`<button class="code-btn" data-act="preview" data-id="${id}">Preview</button>`;
       body.innerHTML=`<div class="art-code"><div class="art-code-hdr"><span>${esc(lang)}</span><div class="art-code-btns">${btns}</div></div><pre><code id="${id}" class="hljs language-${esc(lang)}"></code></pre></div>`;
     }
     const codeEl=document.getElementById(id);
@@ -1011,9 +1016,9 @@ function appendArtifactCard(art, streaming){
       if(isStreaming){
         const isPy=lang==='python'||lang==='py';
         const isSave=['python','py','javascript','js','typescript','ts','html','css','java','cpp','c','rust','go','bash','sh','sql'].includes(lang);
-        let btns=`<button class="code-btn" onclick="copyCode('${id}')">Copy</button>`;
-        if(isPy) btns+=`<button class="code-btn run-btn" onclick="runInline('${id}')">Run</button>`;
-        if(isSave) btns+=`<button class="code-btn vs" onclick="saveInline('${id}','${lang}')">Save</button>`;
+        let btns=`<button class="code-btn" data-act="copy" data-id="${id}">Copy</button>`;
+        if(isPy) btns+=`<button class="code-btn run-btn" data-act="run" data-id="${id}">Run</button>`;
+        if(isSave) btns+=`<button class="code-btn vs" data-act="save" data-id="${id}" data-lang="${esc(lang)}">Save</button>`;
         body.innerHTML=`<div class="art-code"><div class="art-code-hdr"><span>${esc(lang)}</span><div class="art-code-btns">${btns}</div></div><pre><code id="${id}" class="hljs language-${esc(lang)}"></code></pre></div>`;
       }
       const codeEl2=document.getElementById(id);
@@ -1084,14 +1089,20 @@ function renderMD(el,text){
     const isHtml=l==='html';
     const isSave=['python','py','javascript','js','typescript','ts','html','css',
       'java','cpp','c','rust','go','bash','sh','sql'].includes(l);
-    let btns=`<button class="code-btn" onclick="copyCode('${id}')">Copy</button>`;
-    if(isPy) btns+=`<button class="code-btn run-btn" onclick="runInline('${id}')">Run</button>`;
-    if(isSave) btns+=`<button class="code-btn vs" onclick="saveInline('${id}','${l}')">Save</button>`;
-    if(isHtml) btns+=`<button class="code-btn" onclick="previewHtml('${id}')">Preview</button>`;
+    // ponytail: data-* attrs (no onclick) — model output passes through
+    // DOMPurify, which strips event handlers; buttons are wired by the
+    // delegated listener at the bottom of the file instead.
+    let btns=`<button class="code-btn" data-act="copy" data-id="${id}">Copy</button>`;
+    if(isPy) btns+=`<button class="code-btn run-btn" data-act="run" data-id="${id}">Run</button>`;
+    if(isSave) btns+=`<button class="code-btn vs" data-act="save" data-id="${id}" data-lang="${esc(l)}">Save</button>`;
+    if(isHtml) btns+=`<button class="code-btn" data-act="preview" data-id="${id}">Preview</button>`;
     return `<div class="code-block"><div class="code-hdr"><span>${esc(l)}</span><div class="code-hdr-btns">${btns}</div></div><pre><code id="${id}" class="hljs language-${esc(l)}">${hi}</code></pre></div>`;
   };
   marked.setOptions({renderer,breaks:true,gfm:true});
-  el.innerHTML=marked.parse(text);
+  // ponytail: model output is UNTRUSTED (it ingests user files/PDFs).
+  // DOMPurify strips scripts/event handlers; our code buttons use data-*
+  // attrs and are wired by the delegated listener at the bottom of the file.
+  el.innerHTML=DOMPurify.sanitize(marked.parse(text));
 }
 
 function copyCode(id){const el=document.getElementById(id);if(el)navigator.clipboard.writeText(el.textContent).then(()=>toast('Copied!','ok'));}
@@ -1722,6 +1733,20 @@ saveSettings=function(){
   // TTS settings removed for fully local version
   localStorage.setItem('usb_ai_s',JSON.stringify(S.settings));
 };
+
+// ── Delegated code-block buttons (data-act, sanitizer-safe) ─────────────────
+// ponytail: renderMD output passes through DOMPurify (strips onclick), so
+// buttons carry data-* attrs and this one listener dispatches them.
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.code-btn[data-act]');
+  if(!b)return;
+  const id=b.dataset.id;
+  const act=b.dataset.act;
+  if(act==='copy')copyCode(id);
+  else if(act==='run')runInline(id);
+  else if(act==='save')saveInline(id,b.dataset.lang);
+  else if(act==='preview')previewHtml(id);
+});
 
 init();
 </script>
