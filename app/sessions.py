@@ -85,7 +85,15 @@ class SessionStore:
         if not p.exists():
             return {"id": sid, "title": "New Chat", "messages": [],
                     "created": time.time(), "updated": time.time()}
-        return json.loads(p.read_text(encoding="utf-8"))
+        # ponytail: one corrupted history file must not 500 chat/session GET —
+        # log and treat as a fresh session (the file stays on disk for manual
+        # recovery; we never delete user data on a parse failure).
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            _log.warning(f"SESSION: corrupt history file {p.name}: {e}")
+            return {"id": sid, "title": "New Chat (recovering)", "messages": [],
+                    "created": time.time(), "updated": time.time()}
 
     def save(self, data: dict) -> None:
         data["updated"] = time.time()

@@ -118,7 +118,7 @@ def build_plan(sets: dict, ans: dict) -> list[Step]:
                       [py, "-m", "pip", "install", "--no-warn-script-location"] + core_pkgs,
                       optional=False,
                       imports=["fastapi", "pydantic", "pymupdf", "pptx", "PIL",
-                               "numpy", "httpx"]))
+                               "httpx"]))
 
     if ans["llm_inline"]:
         llm_pkgs = list(sets.get("inline-llm", []))

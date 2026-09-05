@@ -164,6 +164,16 @@ class TestSessionIdTraversal(TestCase):
         for sid in ("sess_1784203255562_mclo", "itest-1", "audit-phaseB", "solo1"):
             self.store._path(sid)  # must not raise
 
+    def test_load_corrupt_file_returns_fresh_session(self):
+        # ponytail: one corrupted history file must not 500 chat — load()
+        # logs and returns a fresh session; the file stays for manual recovery.
+        corrupt = Path(self.tmp.name) / "corrupt1.json"
+        corrupt.write_text("{ not valid json !!", encoding="utf-8")
+        d = self.store.load("corrupt1")
+        self.assertEqual(d["id"], "corrupt1")
+        self.assertEqual(d["messages"], [])
+        self.assertTrue(corrupt.exists(), "corrupt file must NOT be deleted")
+
 
 if __name__ == "__main__":
     main()

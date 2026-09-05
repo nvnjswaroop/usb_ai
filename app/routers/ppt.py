@@ -43,8 +43,11 @@ async def api_ppt(req: PPTRequest, request: Request,
         raise HTTPException(500, f"Bad JSON: {e}")
     try:
         filename, _ = ppt_tool.create_ppt(slide_data, req.style)
-    except Exception as e:
-        raise HTTPException(500, f"PPT failed: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        # ponytail: narrow catch + generic client message — str(e) leaked
+        # library internals; detail belongs in the log (matches /api/models/load).
+        _log.error(f"PPT: create_ppt failed: {e}")
+        raise HTTPException(500, "PPT generation failed — see server logs")
     return {"status": "ok", "filename": filename, "title": slide_data.get("title", "")}
 
 

@@ -21,8 +21,11 @@ class TestParseRequirements(TestCase):
         self.assertIn("httpx", " ".join(sets["core"]))
         # whisper must NOT be core anymore (Phase A split)
         self.assertNotIn("openai-whisper", " ".join(sets["core"]))
-        self.assertEqual(len(sets.get("voice", [])), 1)
+        # numpy moved out of core 2026-09-05 — whisper is its only consumer
+        self.assertNotIn("numpy", " ".join(sets["core"]))
+        self.assertEqual(len(sets.get("voice", [])), 2)
         self.assertIn("openai-whisper", sets["voice"][0])
+        self.assertIn("numpy", " ".join(sets["voice"]))
         # Phase C: the inline engine is gone from requirements entirely
         self.assertNotIn("inline-llm", sets)
 

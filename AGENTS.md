@@ -19,7 +19,16 @@
 
 ## Structure
 
-- `app/main.py` — FastAPI app, routes. Single entrypoint (`if __name__ == "__main__"`).
+- `app/main.py` — FastAPI app assembly: middleware (auth, body-size),
+  exception handler, router registration, `/vendor` static mount. Single
+  entrypoint (`if __name__ == "__main__"`).
+- `app/routers/` — one module per surface (system, chat, files, media,
+  voice, ppt, calc, export, sessions, code, agent, openai_compat). The
+  split landed 2026-09 (Group 3); main.py is ~280 lines of glue.
+- `app/dependencies.py` — FastAPI Depends() surface + the auth guards
+  (`require_api_key`, `require_key_always`) + `get_api_key()` (single
+  source of truth — never cache it in a module global).
+- `app/container.py` — DI container: one shared instance per tool.
 - `app/llm_server.py` — llama-server sidecar manager + `ServerEngine`
   (default backend). Duck-type-compatible with `llm.LLMEngine` (legacy
   inline, selected via `USB_AI_BACKEND=inline`); parity is enforced by
@@ -74,8 +83,7 @@ supposed to do" is one line, not paragraph-reading.
 ## Where NOT to add
 
 - New dependency for "just a few lines" — the ladder rules that out.
-- A `routes/` package split — `main.py` is 715 lines, workable. Only split
-  when adding a 4th contributor or crossing ~1500 lines.
+- A custom FTS index for `search_content` — add when profiling shows it's hot.
 - A custom FTS index for `search_content` — add when profiling shows it's hot.
 - A heavier sandbox for `code_tool.run_python` — the ctypes Job Object
   (Windows) and rlimit (POSIX) now cover CPU/RAM/tree-kill. What's still out:

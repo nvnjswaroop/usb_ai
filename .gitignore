@@ -31,3 +31,6 @@ python_install*.log
 
 # Agent-tooling scratch caches (never part of the app)
 .utim_tmp/
+
+# Internal working notes (agent/user scratch, not project content)
+Hermes agent guide.md
