@@ -111,8 +111,11 @@ class FileTool:
             return {"status": "error", "message": f"File not found: {path}"}
         if not p.is_file():
             return {"status": "error", "message": f"Not a file: {path}"}
-        if p.suffix.lower() not in SAFE_WRITE_EXTENSIONS:
-            return {"status": "error", "message": f"Unsupported type: {p.suffix}. Supported: {', '.join(sorted(SAFE_WRITE_EXTENSIONS))}"}
+        # ponytail: reads use the READ set (includes .html/.js for analysis);
+        # the WRITE set here was audit 2026-09-05 — silently broke web-file
+        # reads while the membership test stayed green.
+        if p.suffix.lower() not in SAFE_TEXT_EXTENSIONS:
+            return {"status": "error", "message": f"Unsupported type: {p.suffix}. Supported: {', '.join(sorted(SAFE_TEXT_EXTENSIONS))}"}
         size = p.stat().st_size
         if size > MAX_FILE_SIZE:
             return {"status": "error", "message": f"File too large: {size/1024:.0f}KB (max 1MB)"}

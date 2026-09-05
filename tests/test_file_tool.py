@@ -70,6 +70,18 @@ class TestFileTool(TestCase):
         self.assertEqual(r["status"], "ok")
         self.assertEqual(r["content"], "Hello, World!")
 
+    def test_read_file_accepts_web_types(self):
+        # ponytail: behavior, not membership — read_file used to validate
+        # against SAFE_WRITE_EXTENSIONS while TestSafeExtensions only
+        # checked the set, so broken .html reads passed CI (audit 2026-09-05).
+        for ext in ("html", "js", "jsx", "tsx", "vue"):
+            path = self._p("webfile", ext)
+            Path(path).write_text(f"<p>content {ext}</p>")
+            r = self.tool.read_file(path)
+            self.assertEqual(r["status"], "ok",
+                             f"read_file rejected readable type {ext}: {r.get('message', '')}")
+            self.assertIn("content", r["content"])
+
     def test_write_blocks_html(self):
         path = self._p("evil", "html")
         r = self.tool.write_file(path, "<script>alert('xss')</script>")

@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Request
 
 from dependencies        import get_llm, get_session_store, require_api_key, get_rate_limiter
-from request_models      import RenameRequest
+from request_models      import RenameRequest, SESSION_ID_PATTERN
 from sessions           import SessionStore
 from util               import run_sync
 
@@ -64,7 +64,8 @@ async def api_search_sessions(query: str, request: Request,
 
 
 @router.get("/api/sessions/{sid}")
-async def api_get_session(sid: str, request: Request,
+async def api_get_session(request: Request,
+                          sid: str = PathParam(pattern=SESSION_ID_PATTERN),
                           store: SessionStore = Depends(get_session_store),
                           _auth=Depends(require_api_key),
                           limiter=Depends(get_rate_limiter)):
@@ -75,7 +76,8 @@ async def api_get_session(sid: str, request: Request,
 
 
 @router.delete("/api/sessions/{sid}")
-async def api_del_session(sid: str, request: Request,
+async def api_del_session(request: Request,
+                          sid: str = PathParam(pattern=SESSION_ID_PATTERN),
                           store: SessionStore = Depends(get_session_store),
                           _auth=Depends(require_api_key),
                           limiter=Depends(get_rate_limiter)):
@@ -87,7 +89,8 @@ async def api_del_session(sid: str, request: Request,
 
 
 @router.post("/api/sessions/{sid}/rename")
-async def api_rename(sid: str, req: RenameRequest, request: Request,
+async def api_rename(req: RenameRequest, request: Request,
+                    sid: str = PathParam(pattern=SESSION_ID_PATTERN),
                     store: SessionStore = Depends(get_session_store),
                     _auth=Depends(require_api_key),
                     limiter=Depends(get_rate_limiter)):
@@ -101,7 +104,8 @@ async def api_rename(sid: str, req: RenameRequest, request: Request,
 
 
 @router.post("/api/sessions/{sid}/summarise")
-async def api_summarise(sid: str, request: Request,
+async def api_summarise(request: Request,
+                        sid: str = PathParam(pattern=SESSION_ID_PATTERN),
                         llm=Depends(get_llm), store: SessionStore = Depends(get_session_store),
                         _auth=Depends(require_api_key),
                         limiter=Depends(get_rate_limiter)):

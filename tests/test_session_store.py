@@ -117,5 +117,53 @@ class TestSessionStore(TestCase):
         self.assertEqual(len(r2), 1)
 
 
+class TestSessionIdTraversal(TestCase):
+    """Regression (audit 2026-09-05): sid reached Path() unvalidated.
+
+    An absolute sid REPLACES the history base; ../ escapes via the .json
+    suffix; on Windows %5C survives Starlette path matching. _path() must
+    refuse all three BEFORE building the path.
+    """
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = SessionStore.default(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_path_rejects_absolute_sid(self):
+        with self.assertRaises(ValueError):
+            self.store._path("C:/Users/x/anything")
+
+    def test_path_rejects_dotdot_sid(self):
+        with self.assertRaises(ValueError):
+            self.store._path("../escape")
+
+    def test_path_rejects_backslash_sid(self):
+        with self.assertRaises(ValueError):
+            self.store._path("..\\..\\escape")
+
+    def test_load_cannot_read_outside_history(self):
+        secret = Path(self.tmp.name).parent / (self.tmp.name + "_secret.json")
+        self.addCleanup(lambda: secret.unlink(missing_ok=True))
+        secret.write_text('{"secret": "pwned"}')
+        for sid in (".." + self.tmp.name.split("/")[-1] + "_secret",):
+            with self.assertRaises(ValueError):
+                self.store.load(sid)
+
+    def test_delete_cannot_unlink_outside_history(self):
+        secret = Path(self.tmp.name).parent / (self.tmp.name + "_victim.json")
+        self.addCleanup(lambda: secret.unlink(missing_ok=True))
+        secret.write_text('{"secret": "pwned"}')
+        sid = ".." + self.tmp.name.split("/")[-1] + "_victim"
+        with self.assertRaises(ValueError):
+            self.store.delete(sid)
+        self.assertTrue(secret.exists(), "victim must survive a traversal delete attempt")
+
+    def test_valid_ui_ids_pass(self):
+        for sid in ("sess_1784203255562_mclo", "itest-1", "audit-phaseB", "solo1"):
+            self.store._path(sid)  # must not raise
+
+
 if __name__ == "__main__":
     main()

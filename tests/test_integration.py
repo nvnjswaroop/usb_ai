@@ -247,5 +247,41 @@ class TestLanGuardRawAsgi(IntegrationBase):
         self.assertEqual(self._call("GET", "/api/status", ("::ffff:127.0.0.1", 5000)), 200)
 
 
+class TestSessionIdValidation(IntegrationBase):
+    """Regression (audit 2026-09-05): traversal sids must die at the door.
+
+    /api/chat/stream takes session_id from a raw JSON body — the primary
+    read+write vector on every platform.
+    """
+    def test_chat_stream_traversal_sid_422(self):
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        for sid in ("../../evil", "C:/Users/x/evil", "..\\..\\evil",
+                    "ok_then/../escape"):
+            r = client.post("/api/chat/stream",
+                            json={"session_id": sid, "message": "hi"})
+            self.assertEqual(r.status_code, 422, f"sid {sid!r} must 422, got {r.status_code}")
+            self.assertEqual(list(self.history.glob("*evil*")), [],
+                             f"no file may be touched for sid {sid!r}")
+
+    def test_export_traversal_sid_422(self):
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        r = client.post("/api/export",
+                        json={"session_id": "../../evil", "format": "html"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_path_param_traversal_422(self):
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        # %2F stays encoded through route matching (no match -> 404);
+        # %5C DECODES to backslash after match on Windows-shaped paths —
+        # this is the exact vector proven in the audit.
+        r = client.get("/api/sessions/..%5C..%5Cevil")
+        self.assertIn(r.status_code, (404, 422))
+        r = client.delete("/api/sessions/..%5C..%5Cevil")
+        self.assertIn(r.status_code, (404, 422))
+
+
 if __name__ == "__main__":
     main(verbosity=2)

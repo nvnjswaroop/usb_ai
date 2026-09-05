@@ -10,6 +10,7 @@ this is the only place session disk state is read or written.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,12 @@ class SessionStore:
         return cls(history_dir=history_dir, index_path=history_dir / "_index.json")
 
     def _path(self, sid: str) -> Path:
+        # ponytail: defense-in-depth for the path-param/direct callers the
+        # Pydantic Field(pattern=) never sees. An absolute sid replaces the
+        # base entirely; ../ escapes via the .json suffix — both proven live
+        # (audit 2026-09-05), so the store itself must refuse them.
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
+            raise ValueError(f"Invalid session id: {sid!r}")
         return self.history_dir / f"{sid}.json"
 
     def _invalidate(self) -> None:

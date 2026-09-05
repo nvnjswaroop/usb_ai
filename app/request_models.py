@@ -17,6 +17,14 @@ from pydantic import BaseModel, Field
 MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
+# ponytail: session ids reach Path(history_dir)/f"{sid}.json" — an
+# unvalidated id is a traversal primitive (absolute sid REPLACES the base;
+# ../ escapes via the .json suffix; on Windows %5C survives route matching).
+# This pattern admits every id the UI generates (sess_<ts>_<rand>) and the
+# legacy history files, and nothing else.
+SESSION_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
+
 class LoadModelRequest(BaseModel):
     model_name: str
     n_ctx: int = 4096
@@ -26,7 +34,8 @@ class LoadModelRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    session_id:    str
+    # Field(pattern=) rejects traversal sids with 422 before the handler runs.
+    session_id:    str = Field(pattern=SESSION_ID_PATTERN)
     message:       str = Field(default="", max_length=16000)
     model:         Optional[str] = None
     temperature:   float = 0.7
@@ -96,7 +105,7 @@ class DiffRequest(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(pattern=SESSION_ID_PATTERN)
     format: str = "html"
 
 
