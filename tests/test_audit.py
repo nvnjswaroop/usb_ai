@@ -148,5 +148,40 @@ class TestSearchContent(TestCase):
         self.assertEqual(r["status"], "error")
 
 
+class TestVscodeToolSaveRestrictions(TestCase):
+    """Regression (audit 2026-09-05): save_and_open was a write+execute
+    primitive — no allowlist, then os.startfile on whatever it wrote."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.out = Path(self.tmp, "out")
+        self.out.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _tool(self):
+        # ponytail: neuter VS Code discovery — the test asserts save policy,
+        # not the editor launch; _find_vscode returning None keeps the
+        # "no auto-open" branch deterministic on every machine.
+        import tools.vscode_tool as vt
+        vt._find_vscode = lambda: None
+        return vt.VSCodeTool(self.out)
+
+    def test_save_blocks_executable_types(self):
+        for name in ("evil.bat", "evil.ps1", "evil.html"):
+            r = self._tool().save_and_open("print('x')", name)
+            self.assertEqual(r["status"], "error", f"{name} must be blocked: {r}")
+            self.assertFalse((self.out / name).exists(),
+                             f"{name} must not be written to disk")
+            self.assertEqual(list(self.out.iterdir()), [],
+                             "nothing may be written on a blocked save")
+
+    def test_save_allows_code_types(self):
+        r = self._tool().save_and_open("print('x')", "solution.py")
+        self.assertEqual(r["status"], "ok")
+        self.assertTrue((self.out / "solution.py").exists())
+        self.assertFalse(r["opened_in_vscode"], "no auto-open without VS Code")
+
+
 if __name__ == "__main__":
     main(verbosity=2)

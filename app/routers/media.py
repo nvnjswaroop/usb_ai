@@ -5,6 +5,10 @@ tool — matches the same RAM-OOM protection /api/files/upload uses.
 """
 from __future__ import annotations
 
+import secrets
+import time
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from dependencies   import get_image_tool, get_paths, get_pdf_tool, get_rate_limiter, require_api_key
@@ -35,17 +39,33 @@ async def api_pdf_upload(request: Request,
     ip = request.client.host if request.client else "unknown"
     if not limiter.check(ip):
         raise HTTPException(429, "Rate limit exceeded; try again shortly.")
+    # ponytail: unique temp name — the old dest was output/<safe_name>.pdf,
+    # and the finally-unlink DELETED any pre-existing file the user had with
+    # that name (upload "report.pdf" destroyed output/report.pdf).
     # ponytail: stream-to-disk with the same 10MB cap as /api/files/upload — kills RAM-OOM on large PDFs.
     safe_name = _safe_filename(file.filename)
-    dest = paths.output / safe_name
+    if Path(safe_name).suffix.lower() != ".pdf":
+        raise HTTPException(400, "Expected a .pdf file")
+    dest = paths.output / f"pdf_{int(time.time())}_{secrets.token_hex(4)}.pdf"
     remaining = 10 * 1024 * 1024
-    with open(dest, "wb") as f:
-        while chunk := await file.read(64 * 1024):
-            remaining -= len(chunk)
-            if remaining < 0:
+    completed = False
+    try:
+        with open(dest, "wb") as f:
+            while chunk := await file.read(64 * 1024):
+                remaining -= len(chunk)
+                if remaining < 0:
+                    raise HTTPException(413, "File too large (10MB max)")
+                f.write(chunk)
+        completed = True
+    finally:
+        # ponytail: symmetric partial-file cleanup — matches /api/files/upload;
+        # the old code unlinked only on the size-cap path, so a mid-write
+        # OSError (disk full) orphaned the partial file.
+        if not completed:
+            try:
                 dest.unlink(missing_ok=True)
-                raise HTTPException(413, "File too large (10MB max)")
-            f.write(chunk)
+            except OSError:
+                pass
     try:
         return pdf_tool.extract_text(str(dest))
     finally:

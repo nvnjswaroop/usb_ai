@@ -283,5 +283,30 @@ class TestSessionIdValidation(IntegrationBase):
         self.assertIn(r.status_code, (404, 422))
 
 
+class TestPdfUploadNameCollision(IntegrationBase):
+    """Regression (audit 2026-09-05): uploading "report.pdf" used to delete
+    any pre-existing output/report.pdf (finally-unlink on a shared name)."""
+    def test_upload_does_not_destroy_existing_file(self):
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        existing = self.output / "report.pdf"
+        existing.write_bytes(b"PRE-EXISTING USER FILE")
+        r = client.post("/api/pdf/upload",
+                        files={"file": ("report.pdf", b"%PDF-1.4 fake bytes")})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(existing.read_bytes(), b"PRE-EXISTING USER FILE",
+                         "upload must not touch same-named files in output/")
+        leftovers = [p for p in self.output.iterdir()
+                     if p.name.startswith("pdf_")]
+        self.assertEqual(leftovers, [], f"temp pdf left behind: {leftovers}")
+
+    def test_upload_rejects_non_pdf(self):
+        llm = FakeLLM([])
+        client, _m, store = _make_client(self.history, self.output, llm)
+        r = client.post("/api/pdf/upload",
+                        files={"file": ("payload.exe", b"MZ fake")})
+        self.assertEqual(r.status_code, 400)
+
+
 if __name__ == "__main__":
     main(verbosity=2)

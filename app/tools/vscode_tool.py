@@ -14,6 +14,10 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+# ponytail: import the write allowlist rather than re-declaring it —
+# one source of truth next to the constants it depends on.
+from tools.file_tool import SAFE_WRITE_EXTENSIONS
+
 
 def _find_vscode() -> Optional[str]:
     """Find VS Code executable — check USB first, then system."""
@@ -42,6 +46,14 @@ class VSCodeTool:
         """
         # Sanitise filename
         safe = re.sub(r'[<>:"/\\|?*]', '_', filename).strip() or "output.txt"
+        # ponytail: same write allowlist as file_tool.write_file — without
+        # this, saving "x.bat" wrote batch content and then auto-opened it
+        # (os.startfile EXECUTES .bat) — a write+execute primitive reachable
+        # from the agent's save_code_file (audit 2026-09-05).
+        if Path(safe).suffix.lower() not in SAFE_WRITE_EXTENSIONS:
+            return {"status": "error",
+                    "message": f"Unsupported type: {Path(safe).suffix}. "
+                               f"Supported: {', '.join(sorted(SAFE_WRITE_EXTENSIONS))}"}
         dest = self.output_dir / safe
 
         try:
@@ -58,15 +70,11 @@ class VSCodeTool:
                 return {"status": "ok", "path": str(dest), "opened_in_vscode": False,
                         "note": f"File saved but VS Code failed to open: {e}"}
         else:
-            # Open with default app as fallback
-            # ponytail: OSError only — startfile raises OSError on absent file
-            # association; we don't catch arbitrary Exception (per AGENTS.md).
-            try:
-                os.startfile(str(dest))
-            except OSError as e:
-                _log.warning(f"VSCODE-OPEN: startfile failed {dest}: {e}")
+            # ponytail: no auto-open fallback — os.startfile EXECUTES .bat/.cmd
+            # and hands .html to the browser from the app's origin. The file is
+            # saved; the user opens it on purpose. (audit 2026-09-05)
             return {"status": "ok", "path": str(dest), "opened_in_vscode": False,
-                    "note": "VS Code not found — file saved and opened with default app"}
+                    "note": "VS Code not found — file saved (open it manually)"}
 
     def fix_file_in_place(self, file_path: str, fixed_code: str) -> dict:
         """
