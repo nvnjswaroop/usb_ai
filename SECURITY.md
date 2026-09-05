@@ -17,7 +17,17 @@
 - Read uses `Path.is_relative_to(base.resolve())` — exactly the right Windows
   prefix check (rejects `C:\Users\X\DesktopY` vs `C:\Users\X\Desktop`).
 - File reads cap at 1MB (`MAX_FILE_SIZE`). Writes allowed only on
-  `SAFE_TEXT_EXTENSIONS` (~50 known suffixes).
+  `SAFE_WRITE_EXTENSIONS` (writes) / `SAFE_TEXT_EXTENSIONS` (reads —
+  includes .html/.js for analysis; neither admits .env, .bat, .ps1, .sh).
+
+### Session ids — `app/sessions.py`
+
+- `SessionStore._path` rejects any sid not matching `^[A-Za-z0-9_-]{1,64}$`:
+  an absolute sid would REPLACE the history base; `../` escapes via the
+  `.json` suffix; `%5C`-encoded backslashes survive Starlette path matching
+  on Windows (all three proven live, audit 2026-09-05). Request models
+  (`ChatRequest`, `ExportRequest`) and `{sid}` path params enforce the same
+  pattern at the HTTP layer (422).
 
 ### Calc endpoint — `app/calc.py`
 
