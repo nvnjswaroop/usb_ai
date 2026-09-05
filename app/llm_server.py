@@ -117,14 +117,21 @@ class SidecarManager:
         if mmproj:
             argv += ["--mmproj", str(mmproj)]
         logf = open(self.log_path, "w", encoding="utf-8", errors="replace")
-        self.proc = subprocess.Popen(argv, stdout=logf, stderr=subprocess.STDOUT)
-        self._logf = logf  # ponytail: kept for close() in stop() — OS handle leak (audit 2026-09-03)
-        self.port = port
-        self.model_name = model_name
-        self._assign_kill_on_close()
-        _log.info(f"SIDECAR: spawning pid={self.proc.pid} port={port} "
-                  f"model={model_name}")
-        self._wait_healthy(on_phase)
+        self._logf = logf  # ponytail: closed by stop() — including start() failures
+        try:
+            self.proc = subprocess.Popen(argv, stdout=logf, stderr=subprocess.STDOUT)
+            self.port = port
+            self.model_name = model_name
+            self._assign_kill_on_close()
+            _log.info(f"SIDECAR: spawning pid={self.proc.pid} port={port} "
+                      f"model={model_name}")
+            self._wait_healthy(on_phase)
+        except BaseException:
+            # ponytail: _wait_healthy's early-exit path raises without stopping
+            # — leaked the log handle AND the Popen (ResourceWarnings in tests).
+            # stop() is idempotent, so the timeout path's own stop() is a no-op.
+            self.stop()
+            raise
 
     def _assign_kill_on_close(self) -> None:
         """Orphan protection (Windows): put the child in a KILL_ON_JOB_CLOSE
@@ -178,6 +185,15 @@ class SidecarManager:
             return "(log unavailable)"
 
     def stop(self) -> None:
+        # Close the log handle FIRST — even a start() that failed before
+        # Popen existed must not leak it (stop() is on every failure path).
+        logf = getattr(self, "_logf", None)
+        if logf is not None:
+            try:
+                logf.close()
+            except OSError:
+                pass
+            self._logf = None
         if self.proc is None:
             return
         if self.proc.poll() is None:
@@ -187,13 +203,6 @@ class SidecarManager:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=5)
-        logf = getattr(self, "_logf", None)
-        if logf is not None:
-            try:
-                logf.close()
-            except OSError:
-                pass
-            self._logf = None
         job = getattr(self, "_job", None)
         if job is not None:
             job.close()
