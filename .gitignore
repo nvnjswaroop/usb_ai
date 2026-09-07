@@ -34,3 +34,4 @@ python_install*.log
 
 # Internal working notes (agent/user scratch, not project content)
 Hermes agent guide.md
+.coverage
