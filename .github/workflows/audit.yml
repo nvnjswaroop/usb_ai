@@ -26,5 +26,9 @@ jobs:
       - run: pip install fastapi pydantic python-multipart python-pptx httpx pymupdf pillow coverage
       - name: Run unit tests (with coverage)
         run: coverage run -m unittest discover -s tests -p "test_*.py"
-      - name: Coverage report (informational — no gate yet)
-        run: coverage report --include="app/*" || true
+      # ponytail: measured 55% (Windows, full dep set, 2026-09-07); voice_tool
+      # alone holds ~350 of the missed stmts. Gate sits 5 points under the
+      # measured floor so Linux/Windows platform-branch drift can't flake CI —
+      # ratchet toward 55+ when voice/whisper coverage lands.
+      - name: Coverage gate (fail under 50%)
+        run: coverage report --include="app/*" --fail-under=50
