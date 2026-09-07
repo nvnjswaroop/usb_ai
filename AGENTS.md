@@ -44,22 +44,27 @@
 
 ## Tests
 
-Seven files+, stdlib `unittest` (httpx ships in core requirements.txt, so
+Ten files, stdlib `unittest` (httpx ships in core requirements.txt, so
 starlette's TestClient works everywhere including CI):
 
 ```
-python -m unittest discover -s tests -p "test_*.py"   # runs everything
+python -m unittest discover -s tests -p "test_*.py"   # runs everything (149)
 # or individually:
 python tests/test_audit.py            # security boundary, sliding window,
                                       # calc, code-tool sandbox, search
 python tests/test_security.py         # path-traversal regression, streaming
                                       # extractor, agent JSON parser, schema
                                       # factories, auth matrix, export escaping
-tests/test_session_store.py           # SessionStore index/cache round-trips
-tests/test_rate_limiter.py            # RateLimiter window semantics
-tests/test_file_tool.py               # FileTool resolve/read/write/search
-tests/test_concurrent.py              # parallel request behaviour
-tests/test_openai_compat.py           # /api/v1/* adapter contract
+python tests/test_session_store.py    # SessionStore index/cache round-trips
+                                      # + session-id traversal regressions
+python tests/test_rate_limiter.py     # RateLimiter window semantics
+python tests/test_file_tool.py        # FileTool resolve/read/write/search
+python tests/test_concurrent.py       # parallel request behaviour
+python tests/test_openai_compat.py    # /api/v1/* adapter contract
+python tests/test_integration.py      # e2e: chat SSE, uploads, pdf,
+                                      # LAN guard, sid validation
+python tests/test_installer.py        # scripts/install.py plan building
+python tests/test_sidecar.py          # llama-server sidecar + interface parity
 ```
 
 Auth policy invariant (enforced by `TestAuthMatrix`): when `USB_API_KEY` is
@@ -83,7 +88,6 @@ supposed to do" is one line, not paragraph-reading.
 ## Where NOT to add
 
 - New dependency for "just a few lines" — the ladder rules that out.
-- A custom FTS index for `search_content` — add when profiling shows it's hot.
 - A custom FTS index for `search_content` — add when profiling shows it's hot.
 - A heavier sandbox for `code_tool.run_python` — the ctypes Job Object
   (Windows) and rlimit (POSIX) now cover CPU/RAM/tree-kill. What's still out:
@@ -126,7 +130,7 @@ Update this when big things change; keep it short.
   module — pip-audit can't run inside it) + system Python 3.11 at
   `%LOCALAPPDATA%\Programs\Python\Python311` (use that for pip-audit).
 - Test suite: `python -m unittest discover -s tests -p "test_*.py"` —
-  133 tests, all green as of Phase C.
+  148 tests, all green as of the 2026-09-05 audit.
 
 ### Repo state (after Phase D–G + CI fixes)
 - LLM runtime = `llm_server.py` sidecar (official prebuilt llama-server,
@@ -153,7 +157,10 @@ Update this when big things change; keep it short.
   code_tool.py ponytail comments before touching.
 
 ### Currently open / next candidates
-1. Human browser smoke of the new backend (load Qwen3.5, chat, vision warn).
-2. Score is ~4.7/5 at ceiling (audit 2026-08 via repo review). Remaining
-   ceiling-raisers are architectural (package imports, real sandboxing) —
-   deliberately deferred.
+1. Score is ~4.7/5 at ceiling (audit 2026-08 via repo review). Remaining
+   ceiling-raisers are architectural (package imports, real sandboxing,
+   CSP unsafe-inline, CI coverage gate) — deliberately deferred.
+
+### Done, worth remembering
+- Browser smoke passed 2026-09-07 (isolated copy, deleted after): Qwen3.5-0.8B
+  loads via sidecar, chat SSE streams, vision warning fires on image attach.
