@@ -52,7 +52,7 @@ A portable AI assistant that runs entirely on your machine. No cloud. No interne
 **Python version:**
 - **Any modern Python 3.10+ works.** The LLM runtime is no longer a pip package — `scripts/fetch_llama.py` downloads the official prebuilt `llama-server` binary from ggml's GitHub releases (sha256-pinned in `llama_server.lock`), so there are no cp3xx wheel constraints and nothing is ever compiled.
 - `setup.bat` auto-installs an embeddable Python on Windows if you don't have one.
-- Legacy escape hatch: set `USB_AI_BACKEND=inline` to use the old in-process engine (requires Python 3.11 + `llama-cpp-python==0.3.19`; not installed by default).
+- Legacy escape hatch: set `USB_AI_BACKEND=inline` to use the old in-process engine (requires manual `pip install llama-cpp-python==0.3.19` first; **not installed by default**, not auto-installed by `setup.bat`). Audit 2026-09-17: this branch still exists in `app/container.py` for users who deliberately want the old in-process engine, but you have to bring your own wheel.
 
 **Internet (one-time only, for setup):**
 - Required for first run to install Python packages and pull the GGUF model
@@ -164,7 +164,7 @@ Use the Personas dropdown to switch between:
 
 ### File Browser
 
-Click the folder icon to browse files in allowed locations (project dirs, Desktop, Documents, OneDrive). Read/write text files, browse directories, or navigate to a specific path. The `_resolve()` chokepoint in `app/tools/file_tool.py` enforces this — paths outside the allowlist are rejected. See [SECURITY.md](SECURITY.md) for the threat model.
+Click the folder icon to browse files in allowed locations (project dirs: output/, models/, history/, whisper_models/, plus Desktop and Documents). Read/write text files, browse directories, or navigate to a specific path. The `_resolve()` chokepoint in `app/tools/file_tool.py` enforces this — paths outside the allowlist are rejected. See [SECURITY.md](SECURITY.md) for the threat model.
 
 ### Image Analysis
 
