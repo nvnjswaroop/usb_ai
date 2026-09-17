@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,14 @@ from typing import Optional
 
 from logging_config import getLogger
 _log = getLogger("usbai")
+
+# ponytail: shared lock guards all session JSON reads + writes + index flushes.
+# Audit 2026-09-16 (Terra): two concurrent saves to the same sid could lose
+# messages or leave a partial index file — the previous code held no lock.
+# Per-sid locks would scale better at >100 RPS, but a single global lock is
+# correct at any single-user concurrency level. Trade-off: write throughput
+# is bounded by one save at a time; reads are unblocked.
+_SESSION_LOCK = threading.Lock()
 
 
 PERSONALITIES = {
@@ -98,44 +107,59 @@ class SessionStore:
     def save(self, data: dict) -> None:
         data["updated"] = time.time()
         p = self._path(data["id"])
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        # ponytail: cache-authoritative index with debounced disk flush. The
-        # old code re-read + rewrote the whole index JSON on EVERY save — O(n)
-        # disk RMW per chat message. Now: mutate memory, flush at most once
-        # per INDEX_FLUSH_SECONDS (immediately for brand-new sessions, which
-        # are rare; message-append saves — the hot path — debounce).
-        idx = self._index_cache
-        if idx is None:
-            try:
-                idx = json.loads(self.index_path.read_text(encoding="utf-8")) if self.index_path.exists() else []
-            except (OSError, ValueError):
-                idx = []
-        had_id = any(i.get("id") == data["id"] for i in idx)
-        rec = next((i for i in idx if i.get("id") == data["id"]),
-                   {"id": data["id"]})
-        rec.update({"id": data["id"], "title": data.get("title", "Chat"),
-                    "updated": data["updated"],
-                    "message_count": len(data.get("messages", []))})
-        idx = [i for i in idx if i.get("id") != data["id"]]
-        idx.append(rec)
-        idx.sort(key=lambda x: (x.get("updated", 0), x["id"]), reverse=True)
-        self._index_cache = idx
-        self._index_dirty = True
-        now = time.monotonic()
-        if (not had_id) or (now - self._last_flush) >= self.INDEX_FLUSH_SECONDS:
-            self.flush_index()
+        # ponytail: hold the lock for the whole save — session JSON + index
+        # mutation + flush. Without this, two concurrent saves can clobber
+        # each other's in-memory cache. Reads stay unblocked.
+        # Inline the flush logic instead of calling flush_index() because
+        # threading.Lock is non-reentrant — calling it from inside save
+        # would deadlock the worker. Audit 2026-09-16 (Terra) #3.
+        with _SESSION_LOCK:
+            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            idx = self._index_cache
+            if idx is None:
+                try:
+                    idx = json.loads(self.index_path.read_text(encoding="utf-8")) if self.index_path.exists() else []
+                except (OSError, ValueError):
+                    idx = []
+            had_id = any(i.get("id") == data["id"] for i in idx)
+            rec = next((i for i in idx if i.get("id") == data["id"]),
+                       {"id": data["id"]})
+            rec.update({"id": data["id"], "title": data.get("title", "Chat"),
+                        "updated": data["updated"],
+                        "message_count": len(data.get("messages", []))})
+            idx = [i for i in idx if i.get("id") != data["id"]]
+            idx.append(rec)
+            idx.sort(key=lambda x: (x.get("updated", 0), x["id"]), reverse=True)
+            self._index_cache = idx
+            self._index_dirty = True
+            now = time.monotonic()
+            if (not had_id) or (now - self._last_flush) >= self.INDEX_FLUSH_SECONDS:
+                # Inline flush — see lock comment above.
+                if self._index_dirty and self._index_cache is not None:
+                    try:
+                        self.index_path.write_text(
+                            json.dumps(self._index_cache, ensure_ascii=False),
+                            encoding="utf-8")
+                    except OSError:
+                        pass
+                self._index_dirty = False
+                self._last_flush = now
 
     def flush_index(self) -> None:
         """Write the in-memory index to disk when dirty. Safe to call often."""
-        if self._index_dirty and self._index_cache is not None:
-            try:
-                self.index_path.write_text(
-                    json.dumps(self._index_cache, ensure_ascii=False),
-                    encoding="utf-8")
-            except OSError:
-                pass  # ponytail: index is advisory; list_sessions falls back to glob.
-        self._index_dirty = False
-        self._last_flush = time.monotonic()
+        # ponytail: lock guards the dirty-flag read/write pair so a save()
+        # in flight can't be cleared mid-flight. Called from shutdown +
+        # tests; save() inlines the same logic to avoid reentrant deadlock.
+        with _SESSION_LOCK:
+            if self._index_dirty and self._index_cache is not None:
+                try:
+                    self.index_path.write_text(
+                        json.dumps(self._index_cache, ensure_ascii=False),
+                        encoding="utf-8")
+                except OSError:
+                    pass  # ponytail: index is advisory; list_sessions falls back to glob.
+            self._index_dirty = False
+            self._last_flush = time.monotonic()
 
     def list_index(self, limit: int = 100, rebuild_if_empty: bool = True) -> list:
         # ponytail: in-memory cache is authoritative; push any debounced

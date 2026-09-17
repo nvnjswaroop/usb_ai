@@ -39,8 +39,16 @@ import threading  # noqa: E402  (kept below the helpers to mirror layout)
 @router.get("/", response_class=HTMLResponse)
 async def root(paths=Depends(get_paths)):
     hp = paths.ui / "chat.html"
+    # ponytail: Cache-Control: no-store keeps the browser from caching
+    # chat.html under localhost — defends against a stale llama-ui page
+    # (or any other local WebUI) being served when USB AI is offline.
+    # Without this, a previous session that hit llama-server's WebUI
+    # on a different port can leave cached HTML keyed to `localhost`,
+    # which Brave then serves as a fallback on connection-refused.
+    # Audit 2026-09-17 (smoke test on user's machine).
     return HTMLResponse(
-        hp.read_text(encoding="utf-8") if hp.exists() else "<h1>chat.html missing</h1>"
+        hp.read_text(encoding="utf-8") if hp.exists() else "<h1>chat.html missing</h1>",
+        headers={"Cache-Control": "no-store"},
     )
 
 

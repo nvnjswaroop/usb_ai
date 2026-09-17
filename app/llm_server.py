@@ -297,9 +297,22 @@ class ServerEngine:
     def load_model_sync(self, model_name: str, n_ctx: int = 4096,
                         n_threads: int = 8, n_gpu_layers: int = -1):
         from llm import VISION_KEYWORDS, SlidingWindow
+        # ponytail: defense-in-depth path check — LoadModelRequest already
+        # constrains model_name to basename + .gguf via regex, but the
+        # sidecar is reachable directly from tools/agent_tool paths. Reject
+        # anything that escapes models_dir before the join even happens.
+        # Audit 2026-09-16 (Terra) finding #2.
+        if not re.match(r"^[\w\-. ]+\.gguf$", model_name):
+            raise ValueError(f"Invalid model name: must match [\\w\\-. ]+\\.gguf")
         model_path = self.models_dir / model_name
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
+        # Resolved path must still be inside models_dir — catches any future
+        # regex relaxation silently. Same is_relative_to pattern as file_tool.
+        try:
+            model_path.resolve().relative_to(self.models_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Model path escapes models_dir")
 
         self.set_loading(True)
         self._load_start = time.time()

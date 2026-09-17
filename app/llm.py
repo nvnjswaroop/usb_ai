@@ -302,14 +302,17 @@ class LLMEngine:
                 else:
                     _log.info("GPU     : No GPU detected — using CPU only")
             except Exception as e:
-                _log.info("GPU     : Detection failed ({e}) — using CPU only")
+                # ponytail: f-prefix was missing — log printed literal
+                # "({e})" instead of the error. Audit 2026-09-16 (Terra).
+                _log.info(f"GPU     : Detection failed ({e}) — using CPU only")
         else:
             # User override: 0=CPU, 9999=max GPU layers
             n_gpu_layers = gpu_layers_override
             if n_gpu_layers == 0:
                 _log.info("GPU     : User override — using CPU only")
             else:
-                _log.info("GPU     : User override — using {n_gpu_layers} GPU layers")
+                # ponytail: f-prefix was missing — same bug as above.
+                _log.info(f"GPU     : User override — using {n_gpu_layers} GPU layers")
 
         self._phase = "allocating weights"
         kwargs = dict(

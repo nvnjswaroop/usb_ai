@@ -24,13 +24,20 @@ MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
 # legacy history files, and nothing else.
 SESSION_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 
-
+# ponytail: LoadModelRequest fields are bounded to stop a single request from
+# asking for 1M ctx / 256 threads / 99999 GPU layers and OOM-ing the worker.
+# Audit 2026-09-16 (Terra): no upper bound on n_ctx/n_threads/n_gpu_layers
+# let any auth-OK caller exhaust RAM before the handler ran.
 class LoadModelRequest(BaseModel):
-    model_name: str
-    n_ctx: int = 4096
-    n_threads: int = 8
+    # basename only — no path separators, no traversal. The sidecar then joins
+    # this with models_dir; absolute paths are rejected by the Path join in
+    # llm_server.py (the trailing .gguf check below is the second line of
+    # defense). See audit 2026-09-16 finding #2.
+    model_name: str = Field(pattern=r"^[\w\-. ]+\.gguf$", max_length=128)
+    n_ctx:      int = Field(default=4096, ge=512, le=131072)
+    n_threads:  int = Field(default=8,    ge=1,  le=64)
     # -1 = auto-detect (recommended), 0 = CPU, 9999 = max GPU layers
-    n_gpu_layers: int = -1
+    n_gpu_layers: int = Field(default=-1,  ge=-1, le=9999)
 
 
 class ChatRequest(BaseModel):
@@ -76,11 +83,13 @@ class SaveCodeRequest(BaseModel):
 
 
 class PPTRequest(BaseModel):
-    topic: str
-    num_slides: int = 6
+    topic: str = Field(max_length=200)
+    # ponytail: bound slide count — without this an auth-OK caller can ask
+    # for 10,000 slides and pin the LLM sidecar. Audit 2026-09-16 (Terra).
+    num_slides: int = Field(default=6, ge=1, le=50)
     style: str = "professional"
-    extra_instructions: str = ""
-    session_id: Optional[str] = None
+    extra_instructions: str = Field(default="", max_length=2000)
+    session_id: Optional[str] = Field(default=None, pattern=SESSION_ID_PATTERN)
 
 
 class RenameRequest(BaseModel):

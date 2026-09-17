@@ -164,7 +164,7 @@ Use the Personas dropdown to switch between:
 
 ### File Browser
 
-Click the folder icon to browse any file on your system. Read/write any text file, browse directories, or navigate to a specific path.
+Click the folder icon to browse files in allowed locations (project dirs, Desktop, Documents, OneDrive). Read/write text files, browse directories, or navigate to a specific path. The `_resolve()` chokepoint in `app/tools/file_tool.py` enforces this — paths outside the allowlist are rejected. See [SECURITY.md](SECURITY.md) for the threat model.
 
 ### Image Analysis
 
@@ -258,7 +258,7 @@ app/
 
 ## API Endpoints
 
-All endpoints are under `http://localhost:8080`. Auth is required when `USB_API_KEY` is set. When unset, the server is open (design for local-only use). Mutating endpoints are marked explicitly. Rate-limited endpoints show the limit.
+All endpoints are under `http://localhost:8080`. Auth is required when `USB_API_KEY` is set. When unset, the server is open (design for local-only use). Mutating endpoints are marked explicitly. Every mounted API route except `/api/health` enforces the 30 req/min sliding-window limit at the handler (see `app/rate_limit.py`).
 
 | Method | Path | Purpose | Auth | Rate Limit | Mutates |
 |---|---|---|---|---|---|
@@ -288,8 +288,8 @@ All endpoints are under `http://localhost:8080`. Auth is required when `USB_API_
 | POST | `/api/pdf/extract` | Extract text from PDF path | **Yes** | — | — |
 | POST | `/api/pdf/upload` | Upload PDF, extract, delete temp | **Yes** | — | — |
 | POST | `/api/image/upload` | Upload image, return base64 for vision | **Yes** | — | — |
-| POST | `/api/code/run` | Execute Python | **Yes** | 30/min | — |
-| POST | `/api/code/save` | Save code to `output/` and open VS Code | — | — | âœ“ |
+| POST | `/api/code/run` | Execute Python (**env-gated**: requires `USB_AI_AGENT_CODE=1`) | **Yes** | 30/min | — |
+| POST | `/api/code/save` | Save code to `output/` and open VS Code (**env-gated**: requires `USB_AI_AGENT_CODE=1`) | **Yes** | 30/min | ✓ |
 | GET | `/api/preview/{filename}` | Render `output/` file as HTML | — | — | — |
 | GET | `/api/outputs` | List files in `output/` | — | — | — |
 | GET | `/api/outputs/download/{filename}` | Download `output/` file | — | — | — |
@@ -298,7 +298,7 @@ All endpoints are under `http://localhost:8080`. Auth is required when `USB_API_
 | POST | `/api/voice/transcribe` | Whisper STT (stream to `whisper_models/`) | **Yes** | — | — |
 | POST | `/api/ppt/generate` | Generate PowerPoint from topic | **Yes** | — | — |
 | GET | `/api/ppt/download/{filename}` | Download generated `.pptx` | — | — | — |
-| POST | `/api/agent/execute` | Autonomous agent loop (opt-in) | **Yes** | — | — |
+| POST | `/api/agent/execute` | Autonomous agent loop (**env-gated**: requires `USB_AI_AGENT=1`) | **Yes** | 30/min | — |
 | POST | `/api/v1/chat/completions` | OpenAI-compatible non-streaming chat | **Yes** | 30/min | âœ“ |
 | GET | `/api/v1/models` | OpenAI-compatible model list | **Yes** | 30/min | — |
 

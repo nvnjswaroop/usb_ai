@@ -165,6 +165,12 @@ class FileTool:
             return {"status": "error", "message": f"Not a directory: {path}"}
 
         entries = []
+        # ponytail: cap directory listings at 1000 entries. Without this, a
+        # hostile or curious user pointing at C:\Windows\System32 returns the
+        # entire tree (often >50k items) and pins the worker. 1000 is a
+        # soft cap — enough for any human-navigable directory. Audit
+        # 2026-09-16 (Terra).
+        MAX_ENTRIES = 1000
         try:
             items = sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
             for item in items:
@@ -180,10 +186,15 @@ class FileTool:
                 except (PermissionError, OSError):
                     entries.append({"name": item.name, "type": "directory" if item.is_dir() else "file",
                                     "extension": "", "size_kb": None, "readable": False, "locked": True})
+                if len(entries) >= MAX_ENTRIES:
+                    break
         except PermissionError:
             return {"status": "error", "message": f"Access denied: {path}"}
 
-        return {"status": "ok", "path": str(p), "entries": entries}
+        result = {"status": "ok", "path": str(p), "entries": entries}
+        if len(entries) >= MAX_ENTRIES:
+            result["truncated"] = True
+        return result
 
     def _list_drives(self) -> dict:
         """List available drives (Windows) or root dirs (Linux)."""
@@ -224,11 +235,16 @@ class FileTool:
         q = query.lower()
         hits, scanned = [], 0
 
-        # Collect all eligible files first — avoids submitting dirs to the pool.
+        # ponytail: cap the candidate list before submitting futures. The
+        # previous code built the entire recursive list in memory — a
+        # Desktop/ tree with >50k files would OOM the worker pool queue.
+        # 5000 is enough for any human-scale query. Audit 2026-09-16 (Terra).
+        MAX_CANDIDATES = 5000
         candidates = [
             f for f in p.rglob("*")
             if f.is_file() and f.suffix.lower() in SAFE_TEXT_EXTENSIONS
-        ]
+        ][:MAX_CANDIDATES]
+        candidates_truncated = len(candidates) >= MAX_CANDIDATES
 
         def _scan_file(f: Path) -> list:
             """Read one file and return matching lines. Runs in thread pool."""

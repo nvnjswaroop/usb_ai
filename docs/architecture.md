@@ -8,7 +8,7 @@ USB AI is a **single-process uvicorn app** (no workers, no multiprocessing). All
 - `app.state.container` — tool instances, built once at startup
 - `app.state.session_store` — session disk JSON, mutated via `SessionStore.save()`
 - `app.state.load_lock` — `threading.Lock` protecting Llama model init
-- `app.state.rate_limiter` — per-IP token-bucket, in-process only
+- `app.state.rate_limiter` — per-IP sliding-window, in-process only
 
 The single-process constraint is why the rate limiter is stdlib-only (no Redis needed) and why `app.state` is the DI surface.
 

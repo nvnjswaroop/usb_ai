@@ -7,7 +7,7 @@ for "good contribution" matches that.
 ## Before opening a PR
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"   # 133+ tests, ~15s
+python -m unittest discover -s tests -p "test_*.py"   # 149+ tests, ~13s
 ```
 
 Must be green. CI also runs `pip-audit` and the same test suite — don't bump

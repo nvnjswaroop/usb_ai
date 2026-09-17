@@ -313,7 +313,17 @@ class AgentTool:
         return self._voice_tool.speak(text, rate, 1.0, voice_id)
 
     def _transcribe_audio(self, path: str) -> dict:
-        return self._voice_tool.transcribe(path, "base", str(self.output_dir))
+        # ponytail: route the LLM-supplied path through the file-tool
+        # chokepoint first. Without this, the agent audio escape at
+        # audit 2026-09-16 (Terra) lets an LLM choose any user-readable
+        # audio file on disk — the rest of the agent surface is
+        # `_resolve`-gated, voice_tool was the holdout.
+        from file_tool import _resolve as _resolve_path
+        try:
+            resolved = _resolve_path(path)
+        except (ValueError, OSError) as e:
+            return {"status": "error", "message": f"path not allowed: {e}"}
+        return self._voice_tool.transcribe(str(resolved), "base", str(self.output_dir))
 
     def _list_outputs(self) -> dict:
         try:

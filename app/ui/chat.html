@@ -890,7 +890,16 @@ async function sendMsg(){
             });
           }
           if(data.error) throw new Error(data.error);
-        }catch(e2){}
+        }catch(e2){
+          // ponytail: don't swallow SSE parse / server errors silently —
+          // surface to the chat bubble so the user knows the stream broke.
+          // Audit 2026-09-16 (Terra).
+          const errLine=document.createElement('div');
+          errLine.className='stream-error';
+          errLine.style.cssText='color:var(--err,#e74c3c);font-size:12px;margin-top:6px;padding:6px;border:1px solid var(--err,#e74c3c);border-radius:4px';
+          errLine.textContent='Stream error: '+(e2?.message||'parse failed');
+          aiEl?.appendChild(errLine);
+        }
       }
     }
     // TTS - send full prose, strip code blocks
@@ -995,6 +1004,11 @@ function appendArtifactCard(art, streaming){
     }
     // For HTML/markdown: show live preview first (Claude-style), code collapsed by default
     if(type==='html'||type==='markdown'){
+      // ponytail: id2 used to be a free variable — would ReferenceError at
+      // runtime and prevent the preview iframe from rendering. Derive it
+      // from the code element id so the preview-wrap and its iframe share a
+      // stable base. Audit 2026-09-16 (Terra).
+      const id2='pv-'+id;
       if(!document.getElementById(id2)){
         // Preview first — main draw
         const previewHTML=`<div class="preview-wrap" id="${id2}" style="margin-top:6px"><div class="preview-hdr"><span>${type==='html'?'&#127760; Preview':'&#128221; Rendered'}</span><button style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" onclick="toggleArtCode('${id}')">Code</button><button style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" onclick="this.closest('.preview-wrap').remove()">Close</button></div><iframe sandbox="allow-scripts allow-forms" id="if-${id2}"></iframe></div>`;
@@ -1571,116 +1585,27 @@ async function loadVoices(){
 }
 
 // ── Integrations ─────────────────────────────────────────────────────────────
-let notifPollTimer=null;
-async function checkIntegrations(){
-  try{
-    const d=await fj('/api/integrations/status');
-    updateIntegrationBadge(d);
-    // Poll notifications every 60s if online
-    if(d.online){
-      if(!notifPollTimer) notifPollTimer=setInterval(pollNotifications,60000);
-    }
-  }catch(e){}
-}
-
+// ponytail: the integrations panel referenced removed endpoints
+// (/api/integrations/*). Stubs below surface a clear "removed" message
+// rather than 404-looping the poller every 60s. Audit 2026-09-16
+// (Terra) — dead frontend code drifting from the backend surface.
+const INTEGRATIONS_REMOVED_MSG='Integrations removed in this build.';
+async function checkIntegrations(){}
 function updateIntegrationBadge(d){
-  // Show a small online/offline badge
-  let badge=document.getElementById('online-badge');
-  if(!badge){
-    badge=document.createElement('div');
-    badge.id='online-badge';
-    badge.style.cssText='position:fixed;top:8px;right:10px;z-index:300;font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600';
-    document.body.appendChild(badge);
-  }
-  if(d.online){
-    const connected=d.integrations.filter(i=>i.connected&&i.provider!=='offline');
-    if(connected.length){
-      badge.textContent='🟢 '+connected.length+' connected';
-      badge.style.background='rgba(0,229,160,.15)';badge.style.color='var(--accent)';
-    }else{
-      badge.textContent='🟡 Online';
-      badge.style.background='rgba(255,191,71,.15)';badge.style.color='var(--accent4)';
-    }
-  }else{
-    badge.textContent='⚫ Offline';
-    badge.style.background='var(--surface2)';badge.style.color='var(--muted)';
-  }
+  const badge=document.getElementById('online-badge');
+  if(badge) badge.remove();
 }
-
-async function pollNotifications(){
-  try{
-    const d=await fj('/api/integrations/notifications');
-    if(d.notifications&&d.notifications.length){
-      d.notifications.slice(0,3).forEach(n=>{
-        toast(`${n.provider}: ${n.title}`,'warn');
-      });
-    }
-  }catch(e){}
-}
-
-// ── Integration Panel UI ─────────────────────────────────────────────────────
+async function pollNotifications(){}
 function renderIntegrationsPanel(){
-  // Called when integrations panel opens
-  fj('/api/integrations/status').then(d=>{
-    const list=document.getElementById('integrations-list');
-    if(!list) return;
-    if(!d.integrations){
-      list.innerHTML='<div style="font-size:12px;color:var(--muted)">Integration manager unavailable.</div>';
-      return;
-    }
-    list.innerHTML='';
-    d.integrations.forEach(i=>{
-      const div=document.createElement('div');
-      div.className='persona-card'+(i.connected?' active':'');
-      const dot=i.connected?'🟢':'⚪';
-      const avail=i.available?'Available':'Unavailable';
-      div.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center">
-        <div><div class="persona-name">${i.icon} ${esc(i.display_name)}</div>
-        <div class="persona-prompt">${dot} ${i.connected?'Connected':'Not connected'} · ${avail}</div></div>
-        <button style="background:none;border:1px solid var(--border);color:var(--muted);padding:3px 8px;border-radius:6px;font-size:11px;cursor:pointer" onclick="connectIntegration('${i.provider}')">${i.connected?'Disconnect':'Connect'}</button>
-      </div>`;
-      list.appendChild(div);
-    });
-    // Online status
-    const statusBar=document.getElementById('int-online-status');
-    if(statusBar){
-      statusBar.textContent=d.online?'🟢 Online — checking for notifications':'⚫ Offline — no internet';
-    }
-  });
+  const list=document.getElementById('integrations-list');
+  if(list) list.innerHTML='<div style="font-size:12px;color:var(--muted)">'
+    +INTEGRATIONS_REMOVED_MSG+'</div>';
+  const statusBar=document.getElementById('int-online-status');
+  if(statusBar) statusBar.textContent=INTEGRATIONS_REMOVED_MSG;
 }
-
-async function connectIntegration(provider){
-  try{
-    const d=await fj(`/api/integrations/auth/${provider}`);
-    if(d.url&&d.url.startsWith('http')){
-      toast('Opening auth page...','ok');
-      window.open(d.url,'_blank');
-    }else{
-      // Show instructions
-      toast(d.url||'Configure via environment variables','warn');
-    }
-  }catch(e){toast('Error: '+e.message,'err');}
-}
-
-async function disconnectIntegration(provider){
-  if(!confirm('Disconnect '+provider+'?')) return;
-  try{
-    const d=await fj(`/api/integrations/disconnect/${provider}`,{method:'POST'});
-    toast(d.message||'Disconnected','ok');
-    renderIntegrationsPanel();
-  }catch(e){toast('Error: '+e.message,'err');}
-}
-
-async function sendIntegrationMessage(){
-  const provider=document.getElementById('int-send-provider')?.value;
-  const to=document.getElementById('int-send-to')?.value.trim();
-  const body=document.getElementById('int-send-body')?.value.trim();
-  if(!provider||!to||!body){toast('Fill all fields','warn');return;}
-  try{
-    const d=await fetch('/api/integrations/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,to,body})}).then(r=>r.json());
-    if(d.status==='ok') toast('Sent!','ok'); else toast(d.message||'Failed','err');
-  }catch(e){toast(e.message,'err');}
-}
+async function connectIntegration(provider){toast(INTEGRATIONS_REMOVED_MSG,'warn');}
+async function disconnectIntegration(provider){toast(INTEGRATIONS_REMOVED_MSG,'warn');}
+async function sendIntegrationMessage(){toast(INTEGRATIONS_REMOVED_MSG,'warn');}
 
 // ── Agent Panel UI ───────────────────────────────────────────────────────────
 async function runAgentTask(){

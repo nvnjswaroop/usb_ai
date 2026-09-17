@@ -3,6 +3,7 @@ Image Tool - handles image input for vision models
 Supports: LLaVA, Gemma 3/4, any multimodal GGUF with mmproj
 """
 import base64
+import secrets
 import struct
 import time
 from pathlib import Path
@@ -35,7 +36,11 @@ class ImageTool:
         p = Path(filename)
         if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
             return {"status": "error", "message": f"Unsupported format: {p.suffix}"}
-        dest = self.output_dir / f"img_{int(time.time())}{p.suffix.lower()}"
+        # ponytail: timestamp-only naming collided on same-second uploads
+        # (Terra repro: two PNGs in one second, second overwrote first).
+        # secrets.token_hex(4) gives 8 hex chars — collision-safe at any
+        # upload rate a single user produces.
+        dest = self.output_dir / f"img_{int(time.time())}_{secrets.token_hex(4)}{p.suffix.lower()}"
         dest.write_bytes(data)
         return {
             "status":   "ok",
